@@ -1,0 +1,32 @@
+[project]
+name = "xiaopaw"
+version = "0.1.0"
+description = "XiaoPaw (小爪子) — 飞书本地工作助手"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.9",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "aiohttp-test-utils>=0.0.1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.coverage.run]
+source = ["xiaopaw"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

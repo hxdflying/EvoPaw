@@ -1,0 +1,60 @@
+# XiaoPaw 主任务配置
+# description 中的 {history}, {user_message} 由 crew.akickoff(inputs=...) 注入
+# 注意：session_id 不通过模板注入，由系统内部管理（安全隔离）
+#
+# 💡【第08课·Task 定义】description + expected_output 是 Task 的"契约"两要素：
+#   - description：清楚描述任务背景、输入数据和要求（这里通过模板注入历史和用户消息）
+#   - expected_output：明确定义输出格式——这直接影响 LLM 的结构化输出质量
+#
+# 💡【第09课·显式 Context 传递】{history} 和 {user_message} 通过 akickoff(inputs={...})
+# 显式注入，而非依赖 CrewAI 的隐式上下文传递——显式优于隐式，可追踪、可测试
+#
+# 💡【第08课·output_pydantic】在 main_crew.py 中通过 output_pydantic=MainTaskOutput
+# 强制结构化输出 JSON，对应 Task 定义中 expected_output 的格式约定
+
+main_task:
+  description: |
+    【历史对话】
+    {history}
+
+    【用户消息】
+    {user_message}
+
+    请理解用户需求并完成任务。如需专业能力（搜索、文件处理、飞书操作等），
+    通过 SkillLoaderTool 加载合适的 Skill。如需查询更多历史对话，
+    可使用 history_reader Skill（支持分页读取，参数：page, page_size）。
+
+  expected_output: |
+    以 JSON 格式返回，包含以下字段：
+    {
+      "reply": "发送给飞书用户的回复，清晰简洁，直接回答需求",
+      "used_skills": ["本次调用的 Skill 名称列表，无则为空数组"]
+    }
+    reply 字段内容应适合通过飞书消息直接发送，语气自然友好。
+
+
+# ── Sub-Crew 任务配置（任务型 Skill 执行层）───────────────────────────────────
+#
+# 💡【第08课·Task 契约】description 中的占位符说明：
+#   - {{task_context}} : 双括号转义，Python format 后变为 {task_context}，
+#                        由 SkillLoaderTool 通过 akickoff(inputs={"task_context": ...}) 注入
+#   - {session_dir}    : Python format 替换，由 build_skill_crew() 传入
+#
+# 💡【第09课·显式 Context 传递】{task_context} 同样通过 akickoff(inputs=...) 显式注入，
+# 与主任务的 {history}/{user_message} 遵循同一惯例
+
+skill_task:
+  description: |
+    根据以下任务要求，使用你掌握的 Skill 操作规范完成任务。
+
+    任务要求：
+    {{task_context}}
+
+    执行约束：
+    1. 所有操作必须在 AIO-Sandbox 中执行，禁止直接操作本地文件系统
+    2. 输入文件从沙盒路径 {session_dir}/uploads/ 读取
+    3. 输出文件必须写到沙盒路径 {session_dir}/outputs/ 目录下
+    4. 如遇依赖缺失，先在沙盒中 pip install 再继续
+    5. 返回结果必须符合 task_context 中定义的 JSON schema
+  expected_output: |
+    一份结构化的任务执行结果 JSON，包含 errcode（0=成功）、errmsg（成功时固定'success'，失败时含错误原因和建议）、以及 task_context 中定义的其余字段。

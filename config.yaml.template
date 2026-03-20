@@ -1,0 +1,52 @@
+workspace:
+  id: "xiaopaw-default"
+  name: "XiaoPaw 工作助手"
+
+feishu:
+  # 必填：从飞书开放平台应用配置中获取
+  app_id: "${FEISHU_APP_ID}"
+  app_secret: "${FEISHU_APP_SECRET}"
+  # 可选：事件加密/验证相关配置，如未启用可留空
+  encrypt_key: ""
+  verification_token: ""
+
+bot:
+  loading_message: "思考中..."
+  prefix: ""
+
+agent:
+  model: "qwen3-max"
+  max_iter: 50
+  max_input_tokens: 30000
+  sub_agent_model: "qwen3-max"
+  sub_agent_max_iter: 20
+  timeout_s: 300
+
+skills:
+  global_dir: "../skills"
+  local_dir: "./skills"
+
+sandbox:
+  url: "http://localhost:8022/mcp"   # sandbox-docker-compose.yaml 映射 8022:8080
+  workspace_dir: "/workspace"
+  timeout_s: 120
+  max_retries: 2
+
+session:
+  max_history_turns: 20
+
+runner:
+  queue_idle_timeout_s: 300
+  max_queue_size: 10
+
+sender:
+  max_retries: 3
+  retry_backoff: [1, 2, 4]
+
+data_dir: "./data"
+
+debug:
+  enable_test_api: false
+  test_api_port: 9090
+  test_api_host: "127.0.0.1"
+

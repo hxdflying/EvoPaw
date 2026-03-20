@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  aio-sandbox:
+    image: ghcr.io/agent-infra/sandbox:latest   # AIO-Sandbox MCP Server
+    ports:
+      - "8022:8080"    # Sandbox MCP 端点：http://localhost:8022/mcp
+    volumes:
+      # skills 目录挂载为只读，Sub-Crew 通过 /mnt/skills/{skill_name}/ 访问
+      - ./xiaopaw/skills:/mnt/skills:ro
+      # 整个 workspace 挂载为读写，session 文件在 /workspace/sessions/{sid}/
+      - ./data/workspace:/workspace:rw
+      # cron 配置目录单独挂载，scheduler_mgr Skill 可读写 tasks.json
+      - ./data/cron:/workspace/cron:rw
+    security_opt:
+      - seccomp:unconfined
+    restart: unless-stopped
