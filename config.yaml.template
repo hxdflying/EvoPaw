@@ -32,6 +32,16 @@ sandbox:
   timeout_s: 120
   max_retries: 2
 
+memory:
+  # workspace 目录：Bootstrap 读取 soul.md / user.md / agent.md / memory.md
+  # 初始文件见 workspace-init/（复制到此目录后按实际情况修改）
+  workspace_dir: "./data/workspace"
+  # ctx.json / raw.jsonl 存储目录（跨 session 上下文压缩快照）
+  ctx_dir: "./data/ctx"
+  # pgvector 连接串（空字符串时跳过搜索记忆索引）
+  # 格式：postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory
+  db_dsn: "${MEMORY_DB_DSN:-postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory}"
+
 session:
   max_history_turns: 20
 

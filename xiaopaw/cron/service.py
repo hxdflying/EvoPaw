@@ -176,9 +176,14 @@ class CronService:
             self._last_mtime = st.st_mtime
             self._last_size = st.st_size
             data = json.loads(self._tasks_path.read_text())
+            # 💡 兼容旧格式（直接是 list）和新格式（{"jobs": [...]}）
+            if isinstance(data, list):
+                jobs_raw = data
+            else:
+                jobs_raw = data.get("jobs", [])
             self.jobs = []
             self._disabled_jobs_raw = []
-            for raw in data.get("jobs", []):
+            for raw in jobs_raw:
                 if not raw.get("enabled", True):
                     self._disabled_jobs_raw.append(raw)
                     continue

@@ -86,6 +86,11 @@ async def async_main() -> None:
     max_history_turns = cfg.get("session", {}).get("max_history_turns", 20)
     sandbox_url = cfg.get("sandbox", {}).get("url", "http://localhost:8022/mcp")
 
+    memory_cfg = cfg.get("memory", {})
+    workspace_dir = Path(memory_cfg.get("workspace_dir", "./data/workspace")).resolve()
+    ctx_dir       = Path(memory_cfg.get("ctx_dir", "./data/ctx")).resolve()
+    db_dsn        = memory_cfg.get("db_dsn", "")
+
     debug_cfg = cfg.get("debug", {})
     enable_test_api = debug_cfg.get("enable_test_api", False)
     test_api_host = debug_cfg.get("test_api_host", "127.0.0.1")
@@ -123,8 +128,14 @@ async def async_main() -> None:
         logger.warning("cleanup: startup sweep failed", exc_info=True)
 
     # ── 5. 构建真实 agent_fn ────────────────────────────────────────────────
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    ctx_dir.mkdir(parents=True, exist_ok=True)
+
     agent_fn = build_agent_fn(
         sender=sender,
+        workspace_dir=workspace_dir,
+        ctx_dir=ctx_dir,
+        db_dsn=db_dsn,
         max_history_turns=max_history_turns,
         sandbox_url=sandbox_url,
     )
@@ -173,9 +184,24 @@ async def async_main() -> None:
     ]
 
     if enable_test_api:
+        from xiaopaw.api.capture_sender import CaptureSender  # noqa: PLC0415
         from xiaopaw.api.test_server import create_test_app  # noqa: PLC0415
 
-        test_app = create_test_app(runner=runner, session_mgr=session_mgr)
+        # 💡 核心点：test runner 使用 CaptureSender，拦截 agent 回复供 HTTP 同步返回
+        capture_sender = CaptureSender()
+        test_runner = Runner(
+            session_mgr=session_mgr,
+            sender=capture_sender,
+            agent_fn=agent_fn,
+            downloader=downloader,
+            idle_timeout=idle_timeout,
+        )
+        test_app = create_test_app(
+            runner=test_runner,
+            sender=capture_sender,
+            session_mgr=session_mgr,
+            workspace_dir=workspace_dir,
+        )
         tasks.append(
             asyncio.create_task(
                 _run_test_api(test_app, host=test_api_host, port=test_api_port),

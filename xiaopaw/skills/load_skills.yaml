@@ -48,3 +48,45 @@ skills:
   - name: history_reader
     type: reference   # 直接返回操作规范给主 Agent
     enabled: true
+
+  # ── 记忆体系（第22课新增）────────────────────────────────────────────────────
+  - name: memory-save
+    type: task        # 将偏好/事实持久化到 workspace 文件
+    enabled: true
+
+  - name: skill-creator
+    type: task        # 将 SOP 固化为新 SKILL.md
+    enabled: true
+
+  - name: memory-governance
+    type: task        # 审计 memory.md 死链并清理
+    enabled: true
+
+  - name: search_memory
+    type: task        # 语义搜索 pgvector 历史对话
+    enabled: true
+
+  - name: daily-summary
+    path: ./daily-summary
+    type: task
+    enabled: true
+
+  - name: investment-report
+    path: ./investment-report
+    type: task
+    enabled: true
+
+  - name: investment-review
+    path: ./investment-review
+    type: task
+    enabled: true
+
+  - name: investment-consult
+    path: ./investment-consult
+    type: task
+    enabled: true
+
+  - name: hk-investment-morning-report
+    path: ./hk-investment-morning-report
+    type: task
+    enabled: true

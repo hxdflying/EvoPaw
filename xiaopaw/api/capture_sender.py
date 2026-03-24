@@ -58,8 +58,10 @@ class CaptureSender:
     async def send_text(
         self, routing_key: str, content: str, root_id: str
     ) -> None:
-        """Slash 命令纯文本回复，不走 Future 捕获（不是 Agent 最终回复）。"""
-        pass  # 故意不捕获，slash 命令不应触发测试等待
+        """Slash 命令纯文本回复，也 resolve 对应 Future，让 test_server 能正常返回。"""
+        fut = self._futures.pop(root_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(content)
 
     async def wait_for_reply(self, msg_id: str, timeout: float) -> str:
         """等待 msg_id 对应的回复，超时抛出 asyncio.TimeoutError。"""

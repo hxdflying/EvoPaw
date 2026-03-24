@@ -1,0 +1,67 @@
+# Skill 清单 — XiaoPaw 小爪子工作助手
+#
+# type 字段区分 Skill 的执行方式：
+#   task      → 触发独立 Sub-Crew 在 AIO-Sandbox 中执行（需要代码运行）
+#   reference → 直接注入指令到调用方上下文，不启动 Sub-Crew（只读规范类）
+#
+# enabled: false 时 SkillLoaderTool 跳过该 Skill，不注入到 description
+
+skills:
+  # ── 文件处理 ──────────────────────────────────────────────────────────────
+  - name: pdf
+    type: task        # 需要代码执行（pypdf / pdfplumber）
+    enabled: true
+
+  - name: docx
+    type: task        # 需要代码执行（python-docx / pandoc）
+    enabled: true
+
+  - name: pptx
+    type: task        # 需要代码执行（python-pptx / markitdown）
+    enabled: true
+
+  - name: xlsx
+    type: task        # 需要代码执行（pandas / openpyxl）
+    enabled: true
+
+  # ── 飞书平台操作 ────────────────────────────────────────────────────────────
+  - name: feishu_ops
+    type: task        # 需要代码执行（飞书 REST API 调用）
+    enabled: true
+
+  # ── 定时任务管理 ────────────────────────────────────────────────────────────
+  - name: scheduler_mgr
+    type: task        # 需要代码执行（读写 tasks.json）
+    enabled: true
+
+  # ── 网页搜索 ────────────────────────────────────────────────────────────────
+  - name: baidu_search
+    type: task        # 需要代码执行（调用百度千帆搜索 API）
+    enabled: true
+
+  # ── 网页浏览与内容提取 ──────────────────────────────────────────────────────
+  - name: web_browse
+    type: task        # 需要代码执行（browser_* 工具 + sandbox_convert_to_markdown）
+    enabled: true
+
+  # ── 历史记录读取（参考型：Agent 自行推理，无需 Sub-Crew）──────────────────────
+  - name: history_reader
+    type: reference   # 直接返回操作规范给主 Agent
+    enabled: true
+
+  # ── 记忆体系（第22课新增）────────────────────────────────────────────────────
+  - name: memory-save
+    type: task        # 将偏好/事实持久化到 workspace 文件
+    enabled: true
+
+  - name: skill-creator
+    type: task        # 将 SOP 固化为新 SKILL.md
+    enabled: true
+
+  - name: memory-governance
+    type: task        # 审计 memory.md 死链并清理
+    enabled: true
+
+  - name: search_memory
+    type: task        # 语义搜索 pgvector 历史对话
+    enabled: true

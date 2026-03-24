@@ -2,16 +2,19 @@
 
 基于飞书的本地工作助手，通过 Skills 生态 + AIO-Sandbox（Docker）实现安全可扩展的工具调用。支持飞书 WebSocket 长连接，无需公网 IP，适合本地/内网部署。
 
+> **第22课·记忆篇**：本版本新增三层记忆架构——Bootstrap 上下文注入、ctx.json 跨 session 压缩、pgvector 搜索记忆。
+
 ### 核心功能
 
 - **飞书全场景接入**：单聊（p2p）、群聊（group）、话题群（thread）
 - **Skills 生态**：9 个内置 Skill，覆盖文件处理、网页搜索/浏览、飞书操作、定时任务、历史查询
 - **AIO-Sandbox 隔离**：所有代码执行在 Docker 沙盒中运行，凭证不经过 LLM
+- **三层记忆架构**（第22课新增）：Bootstrap 文件注入 + ctx.json 上下文压缩 + pgvector 语义搜索
 - **Verbose 详细模式**：实时推送 Agent 推理过程，可随时开关
 - **定时任务**：支持一次性（at）、固定间隔（every）、Cron 表达式三种模式
 - **TestAPI**：HTTP 接口本地调试，无需真实飞书环境
-- **卡片消息 + Loading 效果**：发送交互式卡片，Loading 状态实时更新（2026-03-09 新增）
-- **Markdown 富文本渲染**：支持 lark_md 格式，Agent 回复支持加粗、斜体、链接等（2026-03-09 新增）
+- **卡片消息 + Loading 效果**：发送交互式卡片，Loading 状态实时更新
+- **Markdown 富文本渲染**：支持 lark_md 格式，Agent 回复支持加粗、斜体、链接等
 
 ### 内置 Skills
 
@@ -64,7 +67,7 @@ xiaopaw/
 
 ### 环境准备
 
-**依赖**：Python 3.11+、Docker（运行 AIO-Sandbox）
+**依赖**：Python 3.11+、Docker（运行 AIO-Sandbox + pgvector）
 
 ```bash
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
@@ -73,8 +76,12 @@ pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 **环境变量**：
 
 ```bash
-export QWEN_API_KEY=<阿里云千问 API Key>
-export BAIDU_API_KEY=<百度千帆 API Key>       # baidu_search Skill 需要
+export QWEN_API_KEY=<阿里云千问 API Key>       # 必填：LLM + Embedding 调用
+export FEISHU_APP_ID=<飞书应用 App ID>         # 必填：飞书开放平台
+export FEISHU_APP_SECRET=<飞书应用 App Secret>  # 必填：飞书开放平台
+export BAIDU_API_KEY=<百度千帆 API Key>        # 可选：baidu_search Skill
+export MEMORY_DB_DSN=postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory  # 可选：pgvector 搜索记忆
+
 # 调试时可选开启完整请求 payload 日志
 export QWEN_DEBUG_PAYLOAD=1
 ```
@@ -91,14 +98,16 @@ cp config.yaml.template config.yaml
 
 ```yaml
 feishu:
-  app_id: "${FEISHU_APP_ID}"       # 飞书开放平台应用 App ID
-  app_secret: "${FEISHU_APP_SECRET}" # 飞书开放平台应用 App Secret
+  app_id: "${FEISHU_APP_ID}"
+  app_secret: "${FEISHU_APP_SECRET}"
 
-baidu:
-  api_key: "${BAIDU_API_KEY}"       # 百度千帆 API Key（baidu_search Skill）
+memory:
+  workspace_dir: "./data/workspace"   # Bootstrap 读取 soul/user/agent/memory.md
+  ctx_dir: "./data/ctx"              # ctx.json 跨 session 压缩快照
+  db_dsn: "postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory"
 
 sandbox:
-  url: "http://localhost:8022/mcp"  # AIO-Sandbox MCP 地址
+  url: "http://localhost:8022/mcp"
 
 debug:
   enable_test_api: true             # 本地调试时开启
@@ -107,13 +116,43 @@ debug:
 
 完整配置项见 `config.yaml.template`。
 
-### 启动 AIO-Sandbox
+### 初始化 Workspace 文件（第22课记忆篇）
+
+`workspace-init/` 目录提供了初始模板，复制后按实际情况修改：
+
+```bash
+mkdir -p data/workspace
+cp workspace-init/soul.md   data/workspace/soul.md    # XiaoPaw 性格/身份
+cp workspace-init/user.md   data/workspace/user.md    # 用户档案（按需填写）
+cp workspace-init/agent.md  data/workspace/agent.md   # Agent 能力边界
+cp workspace-init/memory.md data/workspace/memory.md  # 长期记忆索引（初始为空）
+```
+
+Bootstrap 阶段（每轮对话开始前）XiaoPaw 会读取这四个文件构建 Agent 背景知识：
+- `soul.md`：不变的性格与原则
+- `user.md`：用户档案（可手动更新，也可由 XiaoPaw 自动追加）
+- `agent.md`：工具清单与能力边界
+- `memory.md`：跨 session 重要信息索引（200行上限，超出自动截断）
+
+### 启动 Docker 服务
+
+**AIO-Sandbox**（代码执行沙盒）：
 
 ```bash
 docker compose -f sandbox-docker-compose.yaml up -d
 ```
 
 Sandbox MCP 端点：`http://localhost:8022/mcp`
+
+**pgvector**（搜索记忆数据库，第22课新增）：
+
+```bash
+docker compose -f pgvector-docker-compose.yaml up -d
+```
+
+pgvector 连接串：`postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory`
+
+> `schema.sql` 在容器首次启动时自动执行，无需手动建表。
 
 ### 启动 XiaoPaw
 
@@ -183,6 +222,6 @@ python3 -m pytest tests/integration/test_e2e_conversation.py -m "llm and not san
 python3 -m pytest tests/integration/ -v -s --timeout=180
 ```
 
-**测试统计**（2026-03-10）：562 单元测试，86% 覆盖率 ✅
+**测试统计**（2026-03-21）：642 单元测试，86%+ 覆盖率 ✅
 
 更多设计细节见 `DESIGN.md` 和 `CLAUDE.md`。
