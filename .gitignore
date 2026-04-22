@@ -1,5 +1,6 @@
 # Runtime data
 data/
+tests/logs/
 
 # Python
 __pycache__/
@@ -10,6 +11,10 @@ dist/
 build/
 .venv/
 config.yaml
+
+# Backup files
+*.bak
+
 # IDE
 .idea/
 .vscode/
