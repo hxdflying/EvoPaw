@@ -1,3 +1,13 @@
+> ⚠️ **归档文档 — CrewAI / AIO-Sandbox 时代** ⚠️
+>
+> 本文档描述的是 **迁移前** 的技术栈：CrewAI + Sub-Crew + AIO-Sandbox + qwen3-max + baidu_search。
+> 当前实现已迁移至 **Claude Agent SDK（Claude Sonnet 4.6 主 Agent + Claude Haiku 4.5 Sub-Agent）**，不再使用 CrewAI 或 AIO-Sandbox。
+> 本文件仅作历史参考，**不代表当前架构**。当前架构请参见 `CLAUDE.md` 与 `docs/message-flow.md`。
+>
+> 归档日期：2026-04-22（按 `docs/redundancy-audit-2026-04-21.md` F1 处理）
+
+---
+
 # XiaoPaw 详细设计文档
 
 > **项目**：XiaoPaw（小爪子）——飞书本地工作助手
@@ -218,7 +228,7 @@ sequenceDiagram
 ## 3. 目录结构
 
 ```
-xiaopaw/
+evopaw/
 ├── main.py / config.yaml / requirements.txt
 ├── llm/aliyun_llm.py            # CrewAI BaseLLM 适配器（通义千问）
 ├── feishu/
@@ -441,13 +451,13 @@ xiaopaw/
 
 ```
 主机
-├── xiaopaw/          ← XiaoPaw 主进程（Python）
+├── evopaw/          ← XiaoPaw 主进程（Python）
 │   └── data/         ← 持久化数据（挂载给 Docker）
 └── docker-compose.yml
 
 Docker 容器
 └── aio-sandbox       ← AIO-Sandbox MCP Server
-    └── /workspace    ← 挂载自主机 xiaopaw/data/workspace/
+    └── /workspace    ← 挂载自主机 evopaw/data/workspace/
 ```
 
 **docker-compose.yml 挂载配置**：
@@ -459,7 +469,7 @@ services:
     ports:
       - "8022:8080"    # Sandbox MCP 端点：http://localhost:8022/mcp
     volumes:
-      - ./xiaopaw/skills:/mnt/skills:ro
+      - ./evopaw/skills:/mnt/skills:ro
       - ./data/workspace:/workspace:rw
       - ./data/cron:/workspace/cron:rw
     restart: unless-stopped
@@ -530,7 +540,7 @@ flowchart TD
 
 | 子系统 | 说明 |
 |-------|------|
-| 日志 | Python `logging`，双输出：控制台可读格式 + `data/logs/xiaopaw.log` JSON 行日志（滚动 50MB×5）|
+| 日志 | Python `logging`，双输出：控制台可读格式 + `data/logs/evopaw.log` JSON 行日志（滚动 50MB×5）|
 | 日志字段 | 统一字段集：消息维度（routing_key/session_id/feishu_msg_id）+ 飞书维度 + HTTP 维度 + Agent 维度 + 错误维度 |
 | Metrics | `prometheus_client` 暴露 `GET /metrics`，默认 `127.0.0.1:9100` |
 | 指标分类 | 飞书事件流量、HTTP API、Session/Runner 并发、Agent/Sub-Crew 执行（预留）、错误计数 |

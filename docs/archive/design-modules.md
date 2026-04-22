@@ -1,4 +1,14 @@
-> 本文档是 [DESIGN.md](../DESIGN.md) §4 的详细内容
+> ⚠️ **归档文档 — CrewAI / AIO-Sandbox 时代** ⚠️
+>
+> 本文档描述的是迁移前的模块设计（`main_crew` / `skill_crew` / `Sub-Crew` / `MCPServerHTTP` / `sandbox_url` / `qwen3-max`）。
+> 当前实现已迁移至 Claude Agent SDK，不再使用这些组件。仅作历史参考，**不代表当前架构**。
+> 当前模块布局请参见 `CLAUDE.md` 的 "Module Layout" 节；消息流请参见 `docs/message-flow.md`。
+>
+> 归档日期：2026-04-22（按 `docs/redundancy-audit-2026-04-21.md` F1 处理）
+
+---
+
+> 本文档是 [DESIGN.md](./DESIGN.md) §4 的详细内容
 > 最后更新：2026-03-10
 
 ## 4. 模块设计

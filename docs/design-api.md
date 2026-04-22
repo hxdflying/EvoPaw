@@ -1,4 +1,4 @@
-> 本文档是 [DESIGN.md](../DESIGN.md) §6 的详细内容
+> 本文档原为 [archive/DESIGN.md](./archive/DESIGN.md) §6 的详细内容（DESIGN.md 已于 2026-04-22 归档）。
 > 最后更新：2026-03-09
 
 ## 6. 接口设计

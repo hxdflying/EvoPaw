@@ -1,5 +1,5 @@
-> 本文档是 [DESIGN.md](../DESIGN.md) §5 的详细内容
-> 最后更新：2026-03-06
+> 本文档原为 [archive/DESIGN.md](./archive/DESIGN.md) §5 的详细内容（DESIGN.md 已于 2026-04-22 归档）。
+> 最后更新：2026-04-22（按 F1 统一术语：Sub-Crew → Sub-Agent；移除 AIO-Sandbox 表述）
 
 ## 5. 数据设计
 
@@ -106,7 +106,7 @@ InboundMessage:
 #### {session_id}.jsonl（清洁对话记录）
 
 ```jsonl
-{"type":"meta","session_id":"s-uuid-002","routing_key":"p2p:ou_abc123","workspace_id":"xiaopaw-hr","created_at":"2026-01-20T14:00:00Z"}
+{"type":"meta","session_id":"s-uuid-002","routing_key":"p2p:ou_abc123","workspace_id":"evopaw-hr","created_at":"2026-01-20T14:00:00Z"}
 {"type":"message","role":"user","content":"帮我把这个 PDF 转成 Word","ts":1737000000,"feishu_msg_id":"om_xxx"}
 {"type":"message","role":"assistant","content":"转换完成，文件已保存到 outputs/result.docx","ts":1737000025}
 {"type":"message","role":"user","content":"每周一9点给我发周报提醒","ts":1737001000,"feishu_msg_id":"om_yyy"}
@@ -146,7 +146,7 @@ data/traces/{session_id}/{ts}_{msg_id}/
 ├── meta.json          # 执行摘要
 ├── main.jsonl         # 主 Agent 完整 context_messages
 └── skills/
-    ├── file_processor.jsonl   # file_processor Sub-Crew context
+    ├── file_processor.jsonl   # file_processor Sub-Agent context
     └── feishu_ops.jsonl
 ```
 
@@ -180,20 +180,20 @@ data/traces/{session_id}/{ts}_{msg_id}/
 
 ### 5.5 Session 工作空间（中间产物）
 
-每个 session 在主机上拥有独立的文件工作区，整体挂载进 AIO-Sandbox 容器：
+每个 session 在主机上拥有独立的文件工作区，作为 Sub-Agent 的 `cwd` 使用（无容器挂载，直接文件系统访问）：
 
 ```
 data/workspace/
 ├── .config/
-│   └── feishu.json              # 启动时写入，Sub-Crew 从此读取 credentials
+│   └── feishu.json              # 启动时写入，Skill 脚本直接读文件（凭证不进入 LLM）
 └── sessions/
     └── {session_id}/
         ├── uploads/             # 用户通过飞书发来的文件（自动下载）
         ├── outputs/             # Skill 产出的成果文件
-        └── tmp/                 # Sub-Crew 临时工作区（session 结束后主动清理）
+        └── tmp/                 # Sub-Agent 临时工作区（session 结束后主动清理）
 ```
 
-**沙盒内可见路径**（docker-compose 挂载整个 workspace/）：
+**Sub-Agent 可见路径**（`cwd=workspace`，SkillLoaderTool description 中以下列形式注入路径字符串）：
 
 ```
 /workspace/.config/feishu.json
@@ -203,8 +203,8 @@ data/workspace/
 ```
 
 **设计原则**：
-- 不同 session 目录完全隔离，Sub-Crew 只能访问自己 session 的目录
-- SkillLoaderTool 在 `sandbox_execution_directive` 中注入实际的 session 目录路径，LLM 可以看到路径但无法获取或篡改 session_id 本身（session_id 不进入 akickoff inputs）
+- 不同 session 目录完全隔离，Sub-Agent 只能访问自己 session 的目录
+- SkillLoaderTool 在工具 description 中注入实际的 session 目录路径字符串，LLM 可以看到路径但无法获取或篡改 session_id 本身（session_id 不进入 LLM context）
 
 ---
 
@@ -265,7 +265,7 @@ version: "1.0"
 # file_processor Skill
 
 ## 功能说明
-...（完整执行指令，由 Sub-Crew 读取）
+...（完整执行指令，由 Sub-Agent 读取）
 ```
 
 #### load_skills.yaml
@@ -285,13 +285,13 @@ skills:
     type: task
     enabled: true
   - name: feishu_ops
-    type: task        # 脚本化架构：Sub-Crew 调用 feishu_ops/scripts/ 下独立 Python 脚本
+    type: task        # 脚本化架构：Sub-Agent 调用 feishu_ops/scripts/ 下独立 Python 脚本
     enabled: true
   - name: scheduler_mgr
-    type: task        # 脚本化架构：Sub-Crew 调用 scheduler_mgr/scripts/ 下独立 Python 脚本
+    type: task        # 脚本化架构：Sub-Agent 调用 scheduler_mgr/scripts/ 下独立 Python 脚本
     enabled: true
   - name: history_reader
-    type: reference   # SkillLoaderTool 内联处理，不启动 Sub-Crew
+    type: reference   # SkillLoaderTool 内联处理，不启动 Sub-Agent
     enabled: true
 ```
 

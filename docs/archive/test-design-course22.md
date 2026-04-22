@@ -1,3 +1,12 @@
+> ⚠️ **归档文档 — CrewAI / AIO-Sandbox 时代** ⚠️
+>
+> 本文档以 AIO-Sandbox 容器运行为测试前提，属于迁移前架构。对应的 `tests/integration/test_course22_cases.py` 中仍保留对 `evopaw.agents.main_crew` 的引用（实际模块已不存在）。
+> 当前测试指南参见 `tests/integration/TEST_CASES.md`（仍待按 F2 拆分为"当前测试"与"历史课程材料"）。
+>
+> 归档日期：2026-04-22（按 `docs/redundancy-audit-2026-04-21.md` F1 处理）
+
+---
+
 # 第22课系统测试设计文档
 
 > **对应课程**：第22课 项目实战3 — XiaoPaw 记忆篇
@@ -34,7 +43,7 @@
 
 ```bash
 export QWEN_API_KEY=sk-xxx          # 通义 API Key（必须）
-export MEMORY_DB_DSN="postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory"  # Group V 必须
+export MEMORY_DB_DSN="postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory"  # Group V 必须
 ```
 
 ### 2.3 Docker 启动命令
