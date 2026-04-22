@@ -36,7 +36,7 @@ import requests as _requests
 # ── Scripts 目录注入 ──────────────────────────────────────────────────────────
 
 SCRIPTS_DIR = (
-    Path(__file__).parent.parent.parent / "xiaopaw" / "skills" / "feishu_ops" / "scripts"
+    Path(__file__).parent.parent.parent / "evopaw" / "skills" / "feishu_ops" / "scripts"
 )
 
 
@@ -125,7 +125,7 @@ class TestCreateDocLive:
 
     def test_title_preserved_in_response(self, feishu_token, auth_mod, capsys):
         """返回的 title 字段应与入参一致。"""
-        title = f"XiaoPaw测试_{_ts()}"
+        title = f"EvoPaw测试_{_ts()}"
         mod = _import_script("create_doc")
         out = _run(mod, ["--title", title], auth_mod, feishu_token, capsys)
 

@@ -19,7 +19,7 @@
   pytest tests/integration/test_lesson22_cases.py -m "llm and not sandbox" -v -s --timeout=180
 
   # 完整套件（需要 MEMORY_DB_DSN + sandbox）
-  MEMORY_DB_DSN=postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory \
+  MEMORY_DB_DSN=postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory \
   pytest tests/integration/test_lesson22_cases.py -v -s --timeout=600
 
 前提：
@@ -76,10 +76,10 @@ async def onboarding_client(
     重要：沙盒的 /workspace/ 硬映射到 ./data/workspace/，所以 workspace_dir
     必须指向该目录，Bootstrap 读取与沙盒写入才能一致。
     """
-    from xiaopaw.agents.main_crew import build_agent_fn
-    from xiaopaw.api.capture_sender import CaptureSender
-    from xiaopaw.api.test_server import create_test_app
-    from xiaopaw.runner import Runner
+    from evopaw.agents.main_crew import build_agent_fn
+    from evopaw.api.capture_sender import CaptureSender
+    from evopaw.api.test_server import create_test_app
+    from evopaw.runner import Runner
 
     # 重置沙盒 workspace 到 workspace-init 干净状态
     workspace_dir = _reset_sandbox_workspace()
@@ -122,10 +122,10 @@ async def memory_client_with_pgvector(
     pgvector_dsn: str,
 ) -> TestClient:
     """带 pgvector 的完整记忆客户端，专用于 Group C 搜索测试。"""
-    from xiaopaw.agents.main_crew import build_agent_fn
-    from xiaopaw.api.capture_sender import CaptureSender
-    from xiaopaw.api.test_server import create_test_app
-    from xiaopaw.runner import Runner
+    from evopaw.agents.main_crew import build_agent_fn
+    from evopaw.api.capture_sender import CaptureSender
+    from evopaw.api.test_server import create_test_app
+    from evopaw.runner import Runner
 
     workspace_dir = _reset_sandbox_workspace()
     ctx_dir = tmp_path / "ctx"
@@ -184,10 +184,10 @@ async def memory_client_l22(
 
     跳过引导 SOP：预填 user.md + 移除 agent.md 中的引导节，让 agent 直接进入工作模式。
     """
-    from xiaopaw.agents.main_crew import build_agent_fn
-    from xiaopaw.api.capture_sender import CaptureSender
-    from xiaopaw.api.test_server import create_test_app
-    from xiaopaw.runner import Runner
+    from evopaw.agents.main_crew import build_agent_fn
+    from evopaw.api.capture_sender import CaptureSender
+    from evopaw.api.test_server import create_test_app
+    from evopaw.runner import Runner
 
     workspace_dir = _reset_sandbox_workspace()
     ctx_dir = tmp_path / "ctx"
@@ -250,7 +250,7 @@ class TestOnboardingSOP:
     async def test_a1_empty_user_triggers_onboarding(
         self, onboarding_client: TestClient
     ):
-        """TC-A1：user.md 为空时，首条消息应触发引导，XiaoPaw 询问名字或用途。
+        """TC-A1：user.md 为空时，首条消息应触发引导，EvoPaw 询问名字或用途。
 
         引导 SOP 第一步是询问是否要为助手起名。
         """
@@ -259,7 +259,7 @@ class TestOnboardingSOP:
 
         assert reply, "首条消息应有回复"
         # 引导的第一步：询问名字或自我介绍
-        onboarding_keywords = ["名字", "叫", "XiaoPaw", "助手", "了解", "帮到你", "用我来做"]
+        onboarding_keywords = ["名字", "叫", "EvoPaw", "助手", "了解", "帮到你", "用我来做"]
         assert any(kw in reply for kw in onboarding_keywords), (
             f"空白 user.md 应触发引导对话，实际回复：{reply!r}"
         )
@@ -378,7 +378,7 @@ class TestSkillCreation:
     ):
         """TC-B1：描述投资早报 SOP → skill-creator 生成 SKILL.md。
 
-        用户说出 SOP 流程，XiaoPaw 调用 skill-creator，生成对应 SKILL.md 文件。
+        用户说出 SOP 流程，EvoPaw 调用 skill-creator，生成对应 SKILL.md 文件。
         """
         data = await send_message(
             memory_client,
@@ -402,8 +402,8 @@ class TestSkillCreation:
 
         # 验证 SKILL.md 文件已生成
         ws = memory_client._workspace_dir
-        # skill-creator 写入 /mnt/skills 下，实际映射到 xiaopaw/skills/
-        skills_dir = Path(__file__).parents[2] / "xiaopaw" / "skills"
+        # skill-creator 写入 /mnt/skills 下，实际映射到 evopaw/skills/
+        skills_dir = Path(__file__).parents[2] / "evopaw" / "skills"
         skill_file = skills_dir / "investment-report" / "SKILL.md"
         # 注意：sandbox 写入路径和测试路径可能不同，检查 load_skills.yaml 作为替代
         load_yaml = skills_dir / "load_skills.yaml"
@@ -427,7 +427,7 @@ class TestSkillCreation:
         )
         await asyncio.sleep(10)
 
-        skills_dir = Path(__file__).parents[2] / "xiaopaw" / "skills"
+        skills_dir = Path(__file__).parents[2] / "evopaw" / "skills"
         skill_file = skills_dir / "daily-report" / "SKILL.md"
         if skill_file.exists():
             content = skill_file.read_text(encoding="utf-8")
@@ -590,7 +590,7 @@ class TestCrossSessionMemory:
         确认偏好已注入到 Agent 系统提示词中，无需 LLM 调用。
         TC-D1 验证写入，TC-D2 验证读取，两者组合证明跨 session 记忆生效。
         """
-        from xiaopaw.memory.bootstrap import build_bootstrap_prompt
+        from evopaw.memory.bootstrap import build_bootstrap_prompt
 
         workspace_dir = _reset_sandbox_workspace()
 

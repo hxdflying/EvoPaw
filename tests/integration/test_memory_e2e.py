@@ -1,4 +1,4 @@
-"""系统级测试：xiaopaw-with-memory 三层记忆
+"""系统级测试：evopaw-with-memory 三层记忆
 
 场景覆盖（无 Mock，全流程）：
   场景1  初次见面 ——空白助手
@@ -44,7 +44,7 @@ class TestBootstrapTruncation:
 
     def test_early_marker_injected_late_marker_excluded(self, tmp_path: Path):
         """第50行的内容应出现在 prompt，第250行的不应出现。"""
-        from xiaopaw.memory.bootstrap import build_bootstrap_prompt
+        from evopaw.memory.bootstrap import build_bootstrap_prompt
 
         workspace = tmp_path / "ws"
         workspace.mkdir()
@@ -62,7 +62,7 @@ class TestBootstrapTruncation:
 
     def test_missing_files_do_not_raise(self, tmp_path: Path):
         """TC-1.1 的纯函数前置：workspace 为空时 build_bootstrap_prompt 不抛异常。"""
-        from xiaopaw.memory.bootstrap import build_bootstrap_prompt
+        from evopaw.memory.bootstrap import build_bootstrap_prompt
 
         empty_ws = tmp_path / "empty"
         empty_ws.mkdir()
@@ -74,7 +74,7 @@ class TestBootstrapTruncation:
 
     def test_soul_content_included(self, tmp_path: Path):
         """soul.md 的内容应出现在 prompt 中。"""
-        from xiaopaw.memory.bootstrap import build_bootstrap_prompt
+        from evopaw.memory.bootstrap import build_bootstrap_prompt
 
         workspace = tmp_path / "ws"
         workspace.mkdir()
@@ -107,7 +107,7 @@ class TestPruneAndCompress:
 
     def test_old_tool_result_pruned(self):
         """TC-C1：超过 keep_turns 的 tool result 应被替换为 [已剪枝]。"""
-        from xiaopaw.memory.context_mgmt import prune_tool_results
+        from evopaw.memory.context_mgmt import prune_tool_results
 
         msgs = self._make_messages(n_turns=12, include_tool=True)
         original_tool_content = msgs[0]["content"]
@@ -121,7 +121,7 @@ class TestPruneAndCompress:
 
     def test_recent_tool_result_not_pruned(self):
         """TC-C1 补充：keep_turns 内的 tool result 不应被剪枝。"""
-        from xiaopaw.memory.context_mgmt import prune_tool_results
+        from evopaw.memory.context_mgmt import prune_tool_results
 
         msgs = self._make_messages(n_turns=3, include_tool=False)
         # 在最后追加一条新 tool result（刚发生）
@@ -140,13 +140,13 @@ class TestPruneAndCompress:
 
     def test_anti_snowball_context_summary_not_counted(self):
         """TC-C3：<context_summary> system 消息不计入压缩阈值，不触发雪崩。"""
-        from xiaopaw.memory.context_mgmt import maybe_compress
+        from evopaw.memory.context_mgmt import maybe_compress
 
         # 构造包含大量 context_summary 的 messages
         # summary 的 token 量很大，但非 system 消息很少
         big_summary = "摘要内容" * 500  # 约 500*3=1500 字
         messages = [
-            {"role": "system", "content": "你是XiaoPaw"},
+            {"role": "system", "content": "你是EvoPaw"},
             {"role": "system", "content": f"<context_summary>{big_summary}</context_summary>"},
             {"role": "system", "content": f"<context_summary>{big_summary}</context_summary>"},
             # 非 system 消息 token 很少，不应触发压缩
@@ -174,7 +174,7 @@ class TestPruneAndCompress:
 @pytest.mark.llm
 @pytest.mark.integration
 class TestFirstMeeting:
-    """场景1：用户拿到全新 XiaoPaw，workspace 为空，第一次对话。"""
+    """场景1：用户拿到全新 EvoPaw，workspace 为空，第一次对话。"""
 
     ROUTING_KEY = "p2p:ou_first_meeting"
 
@@ -269,7 +269,7 @@ class TestCtxRestoreAndIsolation:
 
         # 构造"昨天"的 ctx.json（直接写入，不经过 LLM）
         write_ctx(ctx_dir, session_id, [
-            {"role": "system",    "content": "你是XiaoPaw（旧backstory，应被过滤）"},
+            {"role": "system",    "content": "你是EvoPaw（旧backstory，应被过滤）"},
             {"role": "user",      "content": "第22课准备周五发布"},
             {"role": "assistant", "content": "好的，我记住了，第22课计划周五发布。"},
         ])
@@ -289,7 +289,7 @@ class TestCtxRestoreAndIsolation:
 
         # 覆盖写入 ctx.json（模拟昨天的对话）
         write_ctx(ctx_dir, actual_session_id, [
-            {"role": "system",    "content": "你是XiaoPaw（旧backstory，应被过滤）"},
+            {"role": "system",    "content": "你是EvoPaw（旧backstory，应被过滤）"},
             {"role": "user",      "content": "第22课准备周五发布"},
             {"role": "assistant", "content": "好的，我记住了，第22课计划周五发布。"},
         ])
@@ -318,7 +318,7 @@ class TestCtxRestoreAndIsolation:
 
         # Step2：写入"重启前的 ctx.json"
         write_ctx(ctx_dir, sid, [
-            {"role": "system",    "content": "你是旧版XiaoPaw"},
+            {"role": "system",    "content": "你是旧版EvoPaw"},
             {"role": "user",      "content": "PR_MARKER_42 的代码审查完成了"},
             {"role": "assistant", "content": "好的，PR_MARKER_42 已审查，主要问题：缺少错误处理。"},
         ])
@@ -370,47 +370,11 @@ class TestCtxRestoreAndIsolation:
 @pytest.mark.llm
 @pytest.mark.integration
 class TestRobustness:
-    """TC-6.1：外部依赖故障时系统降级处理。"""
+    """TC-4.3：上下文鲁棒性。
 
-    async def test_tc6_1_bad_pgvector_dsn_does_not_break_chat(
-        self, tmp_path: Path, session_mgr, qwen_api_key: str, sandbox_available: bool
-    ):
-        """TC-6.1：pgvector 不可达时，对话仍然正常（indexer 异步失败不传播）。"""
-        from aiohttp.test_utils import TestServer
-
-        from xiaopaw.agents.main_crew import build_agent_fn
-        from xiaopaw.api.capture_sender import CaptureSender
-        from xiaopaw.api.test_server import create_test_app
-        from xiaopaw.runner import Runner
-        from .conftest import _init_workspace
-
-        workspace_dir, ctx_dir = _init_workspace(tmp_path)
-        bad_dsn = "postgresql://xiaopaw:wrong@localhost:15432/xiaopaw_memory"
-
-        sender = CaptureSender()
-        agent_fn = build_agent_fn(
-            sender=sender,
-            workspace_dir=workspace_dir,
-            ctx_dir=ctx_dir,
-            db_dsn=bad_dsn,   # 故意传入无效 DSN
-            max_history_turns=20,
-            sandbox_url="",
-        )
-        runner = Runner(session_mgr=session_mgr, sender=sender,
-                        agent_fn=agent_fn, idle_timeout=30.0)
-        app = create_test_app(runner=runner, sender=sender,
-                              session_mgr=session_mgr, workspace_dir=workspace_dir)
-
-        from aiohttp.test_utils import TestClient
-        async with TestClient(TestServer(app)) as cli:
-            data = await send_message(cli, "你好", "p2p:ou_bad_dsn_test")
-
-        await runner.shutdown()
-
-        reply = data["reply"]
-        assert reply and "处理出错" not in reply, (
-            f"pgvector 不可达时对话应正常，实际回复：{reply!r}"
-        )
+    注：原 TC-6.1（pgvector 不可达时降级）已归档，因其依赖已移除的
+    evopaw.agents.main_crew；重写见 tests/archive/legacy_crewai/README.md。
+    """
 
     async def test_tc4_3_multi_turn_context_coherent(
         self, memory_client: TestClient
@@ -627,7 +591,7 @@ class TestSearchMemorySkill:
     ):
         """TC-4.2：直接插入历史记忆，通过 search_memory Skill 搜索命中。"""
         import asyncpg
-        from xiaopaw.memory.indexer import embed_texts
+        from evopaw.memory.indexer import embed_texts
 
         rk_history  = "p2p:ou_search_history"
         rk_searcher = "p2p:ou_search_test"
@@ -688,8 +652,8 @@ class TestSearchMemorySkill:
 class TestSkillCreator:
     """TC-3.1：用户描述 SOP，助手通过 skill-creator 固化为 SKILL.md。"""
 
-    # AIO-Sandbox 固定挂载 ./xiaopaw/skills 为 /mnt/skills（sandbox-docker-compose.yaml）
-    _SANDBOX_SKILLS = Path(__file__).parents[2] / "xiaopaw" / "skills"
+    # AIO-Sandbox 固定挂载 ./evopaw/skills 为 /mnt/skills（sandbox-docker-compose.yaml）
+    _SANDBOX_SKILLS = Path(__file__).parents[2] / "evopaw" / "skills"
 
     async def test_tc3_1_skill_creator_generates_skill_file(
         self, memory_client: TestClient
@@ -697,7 +661,7 @@ class TestSkillCreator:
         """TC-3.1：发送 SOP 描述，验证 sandbox skills 目录下生成了新的 SKILL.md。
 
         注：skill-creator Skill 在 sandbox 内运行，写入 /mnt/skills/，对应宿主机
-        /root/course/code/xiaopow/xiaopaw/skills/（docker-compose 固定挂载）。
+        /root/course/code/xiaopow/evopaw/skills/（docker-compose 固定挂载）。
         """
         import shutil
 
@@ -755,7 +719,7 @@ class TestMemoryGovernance:
 
         # 写入含死链的 memory.md
         memory_md.write_text(
-            """# XiaoPaw 记忆索引
+            """# EvoPaw 记忆索引
 
 ## 用户偏好
 → 详见：[topics/DEADLINK_PREF.md](./topics/DEADLINK_PREF.md)

@@ -1,12 +1,15 @@
-# 系统级测试用例设计：xiaopaw-with-memory
+# 系统级测试用例设计：evopaw-with-memory
 
+> ⚠️ **状态说明（2026-04-22）**：本文档描述的场景中部分（L20/L21、file pipeline、course22 case）依赖已移除的 AIO-Sandbox + `main_crew` 架构，相关测试已归档到 `tests/archive/legacy_crewai/`。
+> 本文档暂作为**场景清单参考**保留，不代表当前测试套件的实际可运行范围。按 F2 后续会拆分为"当前测试"与"历史课程材料"。
+>
 > **设计视角**：用户如何把一个空白助手，变成懂自己的私人助手。
 >
 > **全局前提**：
-> - `QWEN_API_KEY` 有效、`MEMORY_DB_DSN` 指向本地 pgvector
+> - `ANTHROPIC_API_KEY` 有效（Claude Agent SDK）
+> - `QWEN_API_KEY` 有效（记忆摘要/向量化）、`MEMORY_DB_DSN` 指向本地 pgvector
 > - pgvector 容器运行：`docker compose -f pgvector-docker-compose.yaml up -d`
-> - AIO-Sandbox 容器运行（L20/L21 场景需要）
-> - 无 Mock：真实 LLM + 真实数据库 + 真实 Sandbox
+> - 无 Mock：真实 LLM + 真实数据库
 
 ---
 
@@ -224,7 +227,7 @@ Session 2（新 session_id，同 routing_key）：
 
 **前置状态**：
 ```python
-# 确保 xiaopaw/skills/ 中不存在 "weekly-report" skill
+# 确保 evopaw/skills/ 中不存在 "weekly-report" skill
 assert not (skills_dir / "weekly-report").exists()
 ```
 
@@ -243,7 +246,7 @@ assert not (skills_dir / "weekly-report").exists()
 
 **预期结果**：
 - 回复中提到"Skill 已创建"或"weekly-report 已生成"
-- `xiaopaw/skills/weekly-report/SKILL.md` 文件存在
+- `evopaw/skills/weekly-report/SKILL.md` 文件存在
 - SKILL.md 包含 `name: weekly-report`
 - SKILL.md 包含对三个步骤的描述
 
@@ -290,7 +293,7 @@ assert not (skills_dir / "weekly-report").exists()
 **前置状态**：
 ```python
 # 直接构造"昨天的 ctx.json"（模拟上一次 session 结束后的状态）
-session_id = "xiaopaw-daily-user"
+session_id = "evopaw-daily-user"
 ctx_content = [
     {"role": "system", "content": "你是XiaoPaw"},   # 旧 backstory（会被过滤）
     {"role": "user",   "content": "第22课准备周五发布"},
@@ -422,7 +425,7 @@ routing_key = "p2p:ou_long_session"
 → 详见：[topics/coding-style.md](./topics/coding-style.md)
 
 ## 项目进度
-→ 详见：[topics/xiaopaw-project.md](./topics/xiaopaw-project.md)
+→ 详见：[topics/evopaw-project.md](./topics/evopaw-project.md)
 """)
 # topics/ 目录不存在
 ```
@@ -433,7 +436,7 @@ routing_key = "p2p:ou_long_session"
 
 **预期结果**：
 - 回复中明确提到存在死链（文件不存在）
-- 具体列出了哪些文件找不到（`coding-style.md` 或 `xiaopaw-project.md`）
+- 具体列出了哪些文件找不到（`coding-style.md` 或 `evopaw-project.md`）
 
 **标记**：`@pytest.mark.llm`, `@pytest.mark.sandbox`
 
@@ -505,7 +508,7 @@ lines[249] = "- LATE_MARKER: 超出截断线的信息"
 **前置状态**：
 ```python
 # 传入一个无法连接的 db_dsn
-db_dsn = "postgresql://xiaopaw:wrong@localhost:15432/xiaopaw_memory"
+db_dsn = "postgresql://evopaw:wrong@localhost:15432/evopaw_memory"
 ```
 
 **测试步骤**：
@@ -598,7 +601,7 @@ ctx_content = [
 async def memory_client(tmp_path, qwen_api_key, sandbox_available, session_mgr):
     """完整三层记忆 E2E 客户端。"""
     import shutil, os
-    from xiaopaw.agents.main_crew import build_agent_fn
+    from evopaw.agents.main_crew import build_agent_fn
 
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()

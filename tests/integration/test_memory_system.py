@@ -1,7 +1,7 @@
 """第22课系统测试：三层记忆能力端到端验证
 
-对应课程案例（草稿_22_XiaoPaw记忆篇_课程草稿.md）：
-  P1  回顾：XiaoPaw 的记忆缺陷（Bootstrap 注入验证）
+对应课程案例（草稿_22_EvoPaw记忆篇_课程草稿.md）：
+  P1  回顾：EvoPaw 的记忆缺陷（Bootstrap 注入验证）
   P2  Case 1：SOP 已在记忆里（skill-creator）
   P3  Case 2：阿里该不该挂单（search_memory 协同 workspace）
   P4  产品化第一步：初始引导触发
@@ -38,7 +38,7 @@ from .conftest import PGVECTOR_DSN, send_message, write_ctx
 # ─────────────────────────────────────────────────────────────────────────────
 # Group P: Bootstrap 注入层（L19）
 # 验证 workspace 四个文件正确注入到 Agent.backstory
-# 对应课程 P1：「XiaoPaw 的记忆缺陷」→ Bootstrap 是解决方案
+# 对应课程 P1：「EvoPaw 的记忆缺陷」→ Bootstrap 是解决方案
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -50,14 +50,14 @@ class TestBootstrapLayer:
     ROUTING_KEY = "p2p:ou_bootstrap_test"
 
     async def test_agent_knows_identity_from_soul_md(self, llm_client: TestClient):
-        """soul.md 注入后，Agent 应知道自己叫 XiaoPaw。
+        """soul.md 注入后，Agent 应知道自己叫 EvoPaw。
 
-        课程对应：P1 右侧「XiaoPaw with Memory」升级后的身份自知。
+        课程对应：P1 右侧「EvoPaw with Memory」升级后的身份自知。
         """
         data = await send_message(llm_client, "你叫什么名字？", self.ROUTING_KEY)
         reply = data["reply"]
-        assert any(kw in reply for kw in ["XiaoPaw", "小爪子"]), (
-            f"Agent 应知道自己叫 XiaoPaw（来自 soul.md），实际：{reply!r}"
+        assert any(kw in reply for kw in ["EvoPaw", "小爪子"]), (
+            f"Agent 应知道自己叫 EvoPaw（来自 soul.md），实际：{reply!r}"
         )
 
     async def test_agent_uses_user_profile_from_user_md(
@@ -75,7 +75,7 @@ class TestBootstrapLayer:
 
         # 移除引导 SOP（模拟引导已完成的 workspace 状态）
         (workspace_dir / "agent.md").write_text(
-            "# Agent 配置\n\n你是 XiaoPaw，简洁回答用户问题。\n",
+            "# Agent 配置\n\n你是 EvoPaw，简洁回答用户问题。\n",
             encoding="utf-8",
         )
 
@@ -214,7 +214,7 @@ class TestContextPersistence:
 
         # 将「秘密代码」注入 ctx.json（模拟上一次 session 已有的对话历史）
         secret_msgs = [
-            {"role": "system", "content": "你是 XiaoPaw"},
+            {"role": "system", "content": "你是 EvoPaw"},
             {"role": "user",      "content": "我的测试秘密代码是 ZXCV9876"},
             {"role": "assistant", "content": "好的，我已记住你的测试秘密代码 ZXCV9876"},
         ]
@@ -303,7 +303,7 @@ class TestFileMemoryLayer:
         """用户描述 SOP 并要求保存为技能，Agent 应调用 skill-creator。
 
         课程对应 P5/P2：
-        「用户描述早报 SOP → XiaoPaw 调用 skill-creator → investment-report/SKILL.md」
+        「用户描述早报 SOP → EvoPaw 调用 skill-creator → investment-report/SKILL.md」
         此测试使用简化版 SOP（避免依赖投资数据），验证 skill-creator 触发确认。
         """
         if not sandbox_available:
@@ -429,7 +429,7 @@ class TestSearchMemoryLayer:
     ):
         """ask 关于历史对话的问题时，Agent 应触发 search_memory 检索 pgvector。
 
-        课程对应 P3：「阿里今天该不该挂单」→ XiaoPaw 识别需要历史持仓信息，
+        课程对应 P3：「阿里今天该不该挂单」→ EvoPaw 识别需要历史持仓信息，
         触发 search_memory → 找到之前提到的成本价和仓位。
 
         测试 Case：
@@ -481,7 +481,7 @@ class TestSearchMemoryLayer:
         """P3 核心 Case：「该不该挂单卖出」隐含历史需求，Agent 主动搜索记忆。
 
         课程 P3 讲解重点：
-        - 用户没有再次告知持仓，XiaoPaw 自己判断「需要历史信息」，触发 search_memory
+        - 用户没有再次告知持仓，EvoPaw 自己判断「需要历史信息」，触发 search_memory
         - search_memory description 覆盖「该不该 XX」类决策问题
 
         测试 Case：先在历史中建立决策背景，新 session 后问决策问题，

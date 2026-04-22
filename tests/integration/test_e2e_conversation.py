@@ -138,14 +138,14 @@ class TestBasicConversation:
     ROUTING_KEY = "p2p:ou_basic_test"
 
     async def test_self_introduction(self, llm_client: TestClient):
-        """Agent 应能介绍自己是 XiaoPaw 工作助手。"""
+        """Agent 应能介绍自己是 EvoPaw 工作助手。"""
         data = await send_message(llm_client, "你好，介绍一下你自己。", self.ROUTING_KEY)
         reply = data["reply"]
         assert len(reply.strip()) > 20, f"回复过短：{reply!r}"
-        # 应提到 XiaoPaw 或助手相关词汇
+        # 应提到 EvoPaw 或助手相关词汇
         assert any(
             kw in reply
-            for kw in ["XiaoPaw", "小爪子", "助手", "帮助", "飞书"]
+            for kw in ["EvoPaw", "小爪子", "助手", "帮助", "飞书"]
         ), f"回复未提及自身身份：{reply!r}"
 
     async def test_simple_question_gets_non_empty_reply(self, llm_client: TestClient):
@@ -216,7 +216,7 @@ class TestMultiTurnContext:
         routing_key = "p2p:ou_ctx_new_test"
 
         # 建立上下文
-        await send_message(llm_client, "密码是 XiaoPaw2024。", routing_key)
+        await send_message(llm_client, "密码是 EvoPaw2024。", routing_key)
 
         # 创建新 session
         await send_message(llm_client, "/new", routing_key)
@@ -227,7 +227,7 @@ class TestMultiTurnContext:
         )
         reply = data["reply"]
         # 不应在新 session 中给出旧密码
-        assert "XiaoPaw2024" not in reply, (
+        assert "EvoPaw2024" not in reply, (
             f"新 session 中不应包含旧上下文，实际：{reply!r}"
         )
 

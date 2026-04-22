@@ -64,11 +64,11 @@ async def sandbox_client(
     - _DEFAULT_TIMEOUT 设为 600s（skill-creator 约需 3-4 分钟）
     - 暴露 _workspace_dir / _ctx_dir 供测试读取文件
     """
-    import xiaopaw.api.test_server as _ts  # noqa: PLC0415
-    from xiaopaw.api.capture_sender import CaptureSender  # noqa: PLC0415
-    from xiaopaw.agents.main_crew import build_agent_fn  # noqa: PLC0415
-    from xiaopaw.runner import Runner  # noqa: PLC0415
-    from xiaopaw.api.test_server import create_test_app  # noqa: PLC0415
+    import evopaw.api.test_server as _ts  # noqa: PLC0415
+    from evopaw.api.capture_sender import CaptureSender  # noqa: PLC0415
+    from evopaw.agents.main_crew import build_agent_fn  # noqa: PLC0415
+    from evopaw.runner import Runner  # noqa: PLC0415
+    from evopaw.api.test_server import create_test_app  # noqa: PLC0415
 
     _orig = _ts._DEFAULT_TIMEOUT
     _ts._DEFAULT_TIMEOUT = 600.0
@@ -129,7 +129,7 @@ class TestSOPSkillRouting:
         """TC-U1：用户描述投资早报 SOP → Agent 调用 skill-creator → 确认技能已创建。
 
         课程 P2 讲解重点（第一步）：
-        「每个 skill 背后都有一次"调教对话"：用户描述 → XiaoPaw 理解 → 确认 → 沉淀」
+        「每个 skill 背后都有一次"调教对话"：用户描述 → EvoPaw 理解 → 确认 → 沉淀」
 
         验证：skill-creator 被正确触发，回复确认技能已创建。
         """
@@ -288,7 +288,7 @@ class TestHoldingsDecision:
         """TC-V1：持仓信息写入 pgvector，/new 清空 context 后，决策问题触发 search_memory。
 
         课程 P3 场景（核心）：
-        「XiaoPaw 识别需要持仓信息 → 调用 search_memory 在历史对话中搜索持仓记录
+        「EvoPaw 识别需要持仓信息 → 调用 search_memory 在历史对话中搜索持仓记录
          → 找到用户之前提到的成本价和仓位 → 结合今日技术面分析给出建议」
 
         验证：/new 后的新 session 中，Agent 能从 pgvector 找回历史持仓。
@@ -482,12 +482,12 @@ class TestOnboardingCompletion:
         """TC-W1：走完全部 6 步引导后，agent.md 的引导 SOP 节被移除。
 
         课程 P4 核心设计点：
-        「自我清除机制：引导完成后，XiaoPaw 调用 memory-save 重写 agent.md，
+        「自我清除机制：引导完成后，EvoPaw 调用 memory-save 重写 agent.md，
          用 str_replace 把引导 SOP 那一节替换掉。无需专门删除逻辑——
          memory-save 的更新优于追加天然实现。引导完成，不留痕迹。」
 
         走完引导的快速路径（每步给一个简短但满足要求的回复）：
-        ① 起名（接受默认 XiaoPaw）
+        ① 起名（接受默认 EvoPaw）
         ② 用途（投资分析）
         ③ 风格（选 A 简洁）
         ④ 用户信息（港股，中等仓位）
@@ -503,7 +503,7 @@ class TestOnboardingCompletion:
         # 快速走完引导（跳过 ⑥ SOP 调教避免 skill-creator 耗时，最后显式触发自删）
         onboarding_msgs = [
             "你好",                             # 触发引导，Agent 介绍自己并问起名
-            "就叫 XiaoPaw 吧，不改了",           # ① 起名确认
+            "就叫 EvoPaw 吧，不改了",           # ① 起名确认
             "主要做港股投资分析",                # ② 用途
             "A",                               # ③ 风格选第一个（简洁）
             "港股为主，仓位大概 50 万港币左右",   # ④ 用户信息
@@ -555,7 +555,7 @@ class TestOnboardingCompletion:
 
         # 触发引导并提供足够信息触发 memory-save 写入
         await send_message(sandbox_client, "你好", routing_key)
-        await send_message(sandbox_client, "就叫 XiaoPaw", routing_key)
+        await send_message(sandbox_client, "就叫 EvoPaw", routing_key)
         purpose_resp = await send_message(
             sandbox_client, "主要用来做 A 股投资分析和每日复盘", routing_key
         )
@@ -659,7 +659,7 @@ class TestSOPTraining:
 
         课程 P5 步骤：
         第一步：用户用自然语言描述 SOP
-        第二步：XiaoPaw 确认理解并结构化（Agent 整理后展示给用户，用户确认）
+        第二步：EvoPaw 确认理解并结构化（Agent 整理后展示给用户，用户确认）
         第三步：调用 skill-creator → 生成 SKILL.md
         第四步：下次直接触发
 

@@ -14,12 +14,12 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 
-from xiaopaw.api.capture_sender import CaptureSender
-from xiaopaw.api.test_server import create_test_app
-from xiaopaw.models import InboundMessage
-from xiaopaw.runner import Runner
-from xiaopaw.session.manager import SessionManager
-from xiaopaw.session.models import MessageEntry
+from evopaw.api.capture_sender import CaptureSender
+from evopaw.api.test_server import create_test_app
+from evopaw.models import InboundMessage
+from evopaw.runner import Runner
+from evopaw.session.manager import SessionManager
+from evopaw.session.models import MessageEntry
 
 
 @pytest.fixture

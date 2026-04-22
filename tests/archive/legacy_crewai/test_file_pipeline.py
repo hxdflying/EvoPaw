@@ -30,11 +30,11 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from xiaopaw.api.capture_sender import CaptureSender
-from xiaopaw.api.test_server import _copy_attachment, create_test_app
-from xiaopaw.runner import Runner
-from xiaopaw.session.manager import SessionManager
-from xiaopaw.session.models import MessageEntry
+from evopaw.api.capture_sender import CaptureSender
+from evopaw.api.test_server import _copy_attachment, create_test_app
+from evopaw.runner import Runner
+from evopaw.session.manager import SessionManager
+from evopaw.session.models import MessageEntry
 
 from .conftest import SANDBOX_URL, send_message
 
@@ -288,7 +288,7 @@ class TestFullFilePipeline:
         if not sandbox_available:
             pytest.skip("AIO-Sandbox 不可达，跳过全链路测试")
 
-        from xiaopaw.agents.main_crew import build_agent_fn
+        from evopaw.agents.main_crew import build_agent_fn
 
         sender = CaptureSender()
         agent_fn = build_agent_fn(
