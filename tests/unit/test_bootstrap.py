@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from xiaopaw.memory.bootstrap import build_bootstrap_prompt
+from evopaw.memory.bootstrap import build_bootstrap_prompt
 
 
 # ── Fixtures ────────────────────────────────────────────────────
@@ -20,7 +20,7 @@ def workspace(tmp_path):
     """标准 4 文件 workspace"""
     ws = tmp_path / "workspace"
     ws.mkdir()
-    (ws / "soul.md").write_text("# XiaoPaw 身份设定\n你是 XiaoPaw。", encoding="utf-8")
+    (ws / "soul.md").write_text("# EvoPaw 身份设定\n你是 EvoPaw。", encoding="utf-8")
     (ws / "user.md").write_text("# 用户画像\n用户：晓寒", encoding="utf-8")
     (ws / "agent.md").write_text("# Agent 规范\n禁止 FileWriterTool。", encoding="utf-8")
     (ws / "memory.md").write_text("# 记忆索引\n## 工作项目\n", encoding="utf-8")
@@ -44,7 +44,7 @@ class TestFourSections:
         # soul.md 内容
         soul_start = result.index("<soul>")
         soul_end = result.index("</soul>")
-        assert "XiaoPaw 身份设定" in result[soul_start:soul_end]
+        assert "EvoPaw 身份设定" in result[soul_start:soul_end]
 
         # user.md 内容
         user_start = result.index("<user_profile>")

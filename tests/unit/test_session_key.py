@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from xiaopaw.feishu.session_key import resolve_routing_key
+from evopaw.feishu.session_key import resolve_routing_key
 
 
 class TestResolveRoutingKey:

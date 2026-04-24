@@ -1,4 +1,4 @@
-"""AddImageToolLocal 单元测试"""
+"""add_image_tool_local 单元测试（Phase 8：纯函数模块）"""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from pathlib import Path
 from unittest.mock import patch
 from PIL import Image
 
-import xiaopaw.tools.add_image_tool_local as _m
-from xiaopaw.tools.add_image_tool_local import (
-    AddImageToolLocal,
+import evopaw.tools.add_image_tool_local as _m
+from evopaw.tools.add_image_tool_local import (
     _compress_image,
-    _local_path_to_base64_data_and_compress_url,
+    extract_image_path,
+    load_image_for_claude,
 )
 
 
@@ -58,114 +58,100 @@ class TestCompressImage:
         assert isinstance(result, bytes)
 
 
-class TestLocalPathToBase64:
-    def test_path_outside_workspace_blocked(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        outside = tmp_path / "secret.txt"
-        outside.write_bytes(b"secret data")
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(outside))
-        assert "错误" in result
-        assert "路径" in result
-
-    def test_nonexistent_file_returns_error(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        nonexistent = fake_root / "missing.jpg"
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(nonexistent))
-        assert "不存在" in result
-
-    def test_file_too_large_blocked(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        big = fake_root / "big.jpg"
-        big.write_bytes(b"x" * (21 * 1024 * 1024))  # 21 MB > 20 MB limit
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(big))
-        assert "过大" in result
-
-    def test_valid_jpeg_returns_data_url(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        img_file = fake_root / "photo.jpg"
+class TestLoadImageForClaude:
+    def test_valid_jpeg_returns_image_block(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        img_file = ws / "photo.jpg"
         img_file.write_bytes(_make_jpeg_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(img_file))
+        result = load_image_for_claude(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result.startswith("data:image/jpeg;base64,")
+        assert result["type"] == "image"
+        assert result["source"]["type"] == "base64"
+        assert result["source"]["media_type"] == "image/jpeg"
+        assert len(result["source"]["data"]) > 0
 
-    def test_valid_png_returns_data_url(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        img_file = fake_root / "icon.png"
+    def test_valid_png_returns_correct_media_type(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        img_file = ws / "icon.png"
         img_file.write_bytes(_make_png_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(img_file))
+        result = load_image_for_claude(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result.startswith("data:image/png;base64,")
+        assert result["source"]["media_type"] == "image/png"
 
-    def test_webp_mime_type(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        # Use .webp extension even though content is JPEG (mime based on extension)
-        img_file = fake_root / "anim.webp"
+    def test_path_outside_workspace_returns_none(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        outside = tmp_path / "secret.jpg"
+        outside.write_bytes(_make_jpeg_bytes())
+        result = load_image_for_claude(str(outside), workspace_root=ws)
+        assert result is None
+
+    def test_nonexistent_file_returns_none(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        result = load_image_for_claude(str(ws / "missing.jpg"), workspace_root=ws)
+        assert result is None
+
+    def test_non_image_extension_returns_none(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        txt_file = ws / "data.txt"
+        txt_file.write_text("not an image")
+        result = load_image_for_claude(str(txt_file), workspace_root=ws)
+        assert result is None
+
+    def test_file_too_large_returns_none(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        big = ws / "big.jpg"
+        big.write_bytes(b"x" * (21 * 1024 * 1024))
+        result = load_image_for_claude(str(big), workspace_root=ws)
+        assert result is None
+
+    def test_webp_media_type(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        img_file = ws / "anim.webp"
         img_file.write_bytes(_make_jpeg_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(img_file))
-        assert "image/webp" in result
+        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        assert result is not None
+        assert result["source"]["media_type"] == "image/webp"
 
-    def test_gif_mime_type(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        img_file = fake_root / "anim.gif"
+    def test_gif_media_type(self, tmp_path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        img_file = ws / "anim.gif"
         img_file.write_bytes(_make_jpeg_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(img_file))
-        assert "image/gif" in result
-
-    def test_bmp_mime_type(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        img_file = fake_root / "bitmap.bmp"
-        img_file.write_bytes(_make_jpeg_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            result = _local_path_to_base64_data_and_compress_url(str(img_file))
-        assert "image/bmp" in result
+        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        assert result is not None
+        assert result["source"]["media_type"] == "image/gif"
 
 
-class TestAddImageToolLocal:
-    def test_http_url_passthrough(self):
-        tool = AddImageToolLocal()
-        result = tool._run("http://example.com/image.jpg")
-        assert result == "http://example.com/image.jpg"
+class TestExtractImagePath:
+    def test_extracts_image_path_from_runner_message(self):
+        msg = (
+            "用户发来了文件，已自动保存至沙盒路径：\n"
+            "`/workspace/sessions/s-001/uploads/photo.jpg`\n"
+            "请根据文件内容和用户意图完成相应处理。"
+        )
+        result = extract_image_path(msg)
+        assert result == "/workspace/sessions/s-001/uploads/photo.jpg"
 
-    def test_https_url_passthrough(self):
-        tool = AddImageToolLocal()
-        result = tool._run("https://cdn.example.com/img.png")
-        assert result == "https://cdn.example.com/img.png"
+    def test_returns_none_for_non_image_file(self):
+        msg = (
+            "用户发来了文件，已自动保存至沙盒路径：\n"
+            "`/workspace/sessions/s-001/uploads/report.pdf`\n"
+        )
+        result = extract_image_path(msg)
+        assert result is None
 
-    def test_local_path_blocked_outside_workspace(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        outside = tmp_path / "bad.jpg"
-        outside.write_bytes(b"data")
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            tool = AddImageToolLocal()
-            result = tool._run(str(outside))
-        assert "错误" in result
+    def test_returns_none_for_plain_text(self):
+        result = extract_image_path("你好，请帮我分析这张图")
+        assert result is None
 
-    def test_local_path_within_workspace_returns_data_url(self, tmp_path):
-        fake_root = tmp_path / "workspace"
-        fake_root.mkdir()
-        img_file = fake_root / "photo.jpg"
-        img_file.write_bytes(_make_jpeg_bytes())
-        with patch.object(_m, "_WORKSPACE_ROOT", fake_root.resolve()):
-            tool = AddImageToolLocal()
-            result = tool._run(str(img_file))
-        assert result.startswith("data:image/jpeg;base64,")
-
-    def test_tool_name(self):
-        tool = AddImageToolLocal()
-        assert tool.name == "Add image to content Local"
+    def test_extracts_png_path(self):
+        msg = "`/workspace/sessions/s-002/uploads/screenshot.png`"
+        result = extract_image_path(msg)
+        assert result == "/workspace/sessions/s-002/uploads/screenshot.png"

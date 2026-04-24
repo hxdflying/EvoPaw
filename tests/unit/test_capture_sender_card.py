@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from xiaopaw.api.capture_sender import CaptureSender
+from evopaw.api.capture_sender import CaptureSender
 
 
 class TestCaptureSenderSendThinking:

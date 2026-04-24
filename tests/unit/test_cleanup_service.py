@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from xiaopaw.cleanup.service import CleanupPolicy, CleanupService
+from evopaw.cleanup.service import CleanupPolicy, CleanupService
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -171,40 +171,40 @@ class TestWriteFeishuCredentials:
         assert creds["app_secret"] == "new_secret"
 
 
-# ── write_baidu_credentials ───────────────────────────────────────────────────
+# ── write_tavily_credentials ──────────────────────────────────────────────────
 
 
-class TestWriteBaiduCredentials:
+class TestWriteTavilyCredentials:
     def test_credentials_written_correctly(self, tmp_path: Path):
         svc = _make_service(tmp_path)
-        svc.write_baidu_credentials(api_key="qianfan-key-xyz")
+        svc.write_tavily_credentials(api_key="tvly-key-xyz")
 
-        creds_file = tmp_path / "workspace/.config/baidu.json"
+        creds_file = tmp_path / "workspace/.config/tavily.json"
         assert creds_file.exists()
         creds = json.loads(creds_file.read_text())
-        assert creds["api_key"] == "qianfan-key-xyz"
+        assert creds["api_key"] == "tvly-key-xyz"
 
     def test_empty_api_key_skips_write(self, tmp_path: Path):
         svc = _make_service(tmp_path)
-        svc.write_baidu_credentials(api_key="")
+        svc.write_tavily_credentials(api_key="")
 
-        creds_file = tmp_path / "workspace/.config/baidu.json"
+        creds_file = tmp_path / "workspace/.config/tavily.json"
         assert not creds_file.exists(), "空 api_key 不应写入文件"
 
     def test_credentials_atomic_write(self, tmp_path: Path):
         """写入过程中不应留有 .json.tmp 残留文件。"""
         svc = _make_service(tmp_path)
-        svc.write_baidu_credentials(api_key="key-123")
+        svc.write_tavily_credentials(api_key="key-123")
 
-        tmp_file = tmp_path / "workspace/.config/baidu.json.tmp"
+        tmp_file = tmp_path / "workspace/.config/tavily.json.tmp"
         assert not tmp_file.exists(), ".tmp 文件应在写入后被清理"
 
     def test_overwrite_existing_credentials(self, tmp_path: Path):
         svc = _make_service(tmp_path)
-        svc.write_baidu_credentials(api_key="old-key")
-        svc.write_baidu_credentials(api_key="new-key")
+        svc.write_tavily_credentials(api_key="old-key")
+        svc.write_tavily_credentials(api_key="new-key")
 
-        creds_file = tmp_path / "workspace/.config/baidu.json"
+        creds_file = tmp_path / "workspace/.config/tavily.json"
         creds = json.loads(creds_file.read_text())
         assert creds["api_key"] == "new-key"
 
@@ -214,8 +214,8 @@ class TestWriteBaiduCredentials:
         config_dir = tmp_path / "workspace" / ".config"
         assert not config_dir.exists()
 
-        svc.write_baidu_credentials(api_key="key-abc")
+        svc.write_tavily_credentials(api_key="key-abc")
 
         assert config_dir.is_dir()
-        assert (config_dir / "baidu.json").exists()
+        assert (config_dir / "tavily.json").exists()
 

@@ -18,7 +18,7 @@ import pytest
 
 from unittest.mock import patch
 
-from xiaopaw.memory.context_mgmt import (
+from evopaw.memory.context_mgmt import (
     append_session_raw,
     chunk_by_tokens,
     load_session_ctx,
@@ -154,53 +154,39 @@ class TestChunkByTokens:
 # ── maybe_compress ─────────────────────────────────────────────
 
 
-def _make_context_mock(ctx_window: int = 32000):
-    """构造 LLMCallHookContext mock，支持 context.llm.context_window_size"""
-    from unittest.mock import MagicMock  # noqa: PLC0415
-    ctx = MagicMock()
-    ctx.llm.context_window_size = ctx_window
-    return ctx
-
-
 class TestMaybeCompress:
     def test_below_threshold_no_compression(self):
         """token 使用率低于阈值时不压缩"""
         msgs = _make_turns(2)  # 少量消息
         original = [m.copy() for m in msgs]
-        ctx = _make_context_mock(ctx_window=32000)
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
-            maybe_compress(msgs, ctx, compress_threshold=0.45)
+        with patch("evopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
+            maybe_compress(msgs, model_ctx_limit=32000, compress_threshold=0.45)
         mock_sum.assert_not_called()
         assert msgs == original
 
     def test_above_threshold_triggers_compression(self):
         """token 使用率超过阈值时，_summarize_chunk 被调用"""
-        # 造一批大消息使 token 超阈值
         msgs = [{"role": "user",      "content": "x" * 10000} for _ in range(5)] + \
                [{"role": "assistant", "content": "y" * 10000} for _ in range(5)]
-        ctx = _make_context_mock(ctx_window=1000)  # 极小的 ctx_window → 必超阈值
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk", return_value="摘要") as mock_sum:
-            maybe_compress(msgs, ctx, fresh_keep_turns=2, compress_threshold=0.01)
+        with patch("evopaw.memory.context_mgmt._summarize_chunk", return_value="摘要") as mock_sum:
+            maybe_compress(msgs, model_ctx_limit=1000, fresh_keep_turns=2, compress_threshold=0.01)
         mock_sum.assert_called()
 
     def test_system_messages_preserved_after_compression(self):
         """压缩后 system 消息（框架注入的）仍在结果中"""
-        system_msg = {"role": "system", "content": "你是 XiaoPaw。"}
+        system_msg = {"role": "system", "content": "你是 EvoPaw。"}
         user_msgs  = [{"role": "user",      "content": "q" * 5000} for _ in range(6)]
         asst_msgs  = [{"role": "assistant", "content": "a" * 5000} for _ in range(6)]
         msgs = [system_msg] + [m for pair in zip(user_msgs, asst_msgs) for m in pair]
-        ctx = _make_context_mock(ctx_window=100)  # 强制超阈值
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk", return_value="摘要"):
-            maybe_compress(msgs, ctx, fresh_keep_turns=2, compress_threshold=0.01)
-        assert any(m.get("content") == "你是 XiaoPaw。" for m in msgs)
+        with patch("evopaw.memory.context_mgmt._summarize_chunk", return_value="摘要"):
+            maybe_compress(msgs, model_ctx_limit=100, fresh_keep_turns=2, compress_threshold=0.01)
+        assert any(m.get("content") == "你是 EvoPaw。" for m in msgs)
 
     def test_fresh_turns_preserved_verbatim(self):
         """最近 fresh_keep_turns 轮的 user 消息原文保留"""
         turns = _make_turns(8)
-        ctx = _make_context_mock(ctx_window=100)
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk", return_value="摘要"):
-            maybe_compress(turns, ctx, fresh_keep_turns=3, compress_threshold=0.01)
-        # 最后 3 个 user 消息内容（问题5、6、7）不应被替换
+        with patch("evopaw.memory.context_mgmt._summarize_chunk", return_value="摘要"):
+            maybe_compress(turns, model_ctx_limit=100, fresh_keep_turns=3, compress_threshold=0.01)
         user_msgs = [m for m in turns if m.get("role") == "user"]
         assert user_msgs[-1]["content"] == "问题7"
         assert user_msgs[-2]["content"] == "问题6"
@@ -210,25 +196,20 @@ class TestMaybeCompress:
         """轮数 ≤ fresh_keep_turns 时不压缩（无法划分"旧区"）"""
         msgs = _make_turns(2)
         original = [m.copy() for m in msgs]
-        ctx = _make_context_mock(ctx_window=1)  # 极小，理论上会超阈值
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
-            maybe_compress(msgs, ctx, fresh_keep_turns=5, compress_threshold=0.0)
+        with patch("evopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
+            maybe_compress(msgs, model_ctx_limit=1, fresh_keep_turns=5, compress_threshold=0.0)
         mock_sum.assert_not_called()
 
     def test_summary_messages_not_counted_in_threshold(self):
         """已有 <context_summary> system 消息不应使阈值判断失效（防雪崩）"""
-        # 插入大量 context_summary system 消息，模拟多轮压缩后的状态
         summary_msgs = [
             {"role": "system", "content": "<context_summary>\n" + "s" * 10000 + "\n</context_summary>"}
             for _ in range(10)
         ]
-        # 少量真正的对话消息（不足以单独触发阈值）
-        small_conv = _make_turns(2)  # token 很小
+        small_conv = _make_turns(2)
         msgs = summary_msgs + small_conv
-        ctx = _make_context_mock(ctx_window=32000)
-        with patch("xiaopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
-            maybe_compress(msgs, ctx, compress_threshold=0.45)
-        # 非 system 消息 token 远低于阈值，不应触发压缩
+        with patch("evopaw.memory.context_mgmt._summarize_chunk") as mock_sum:
+            maybe_compress(msgs, model_ctx_limit=32000, compress_threshold=0.45)
         mock_sum.assert_not_called()
 
 

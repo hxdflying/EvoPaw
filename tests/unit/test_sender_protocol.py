@@ -12,9 +12,9 @@ import inspect
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from xiaopaw.models import SenderProtocol
-from xiaopaw.feishu.sender import FeishuSender
-from xiaopaw.api.capture_sender import CaptureSender
+from evopaw.models import SenderProtocol
+from evopaw.feishu.sender import FeishuSender
+from evopaw.api.capture_sender import CaptureSender
 
 
 class TestSenderProtocolMethods:

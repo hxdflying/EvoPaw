@@ -8,9 +8,9 @@ import time
 
 import pytest
 
-from xiaopaw.cron.models import CronJob, CronPayload, CronSchedule, CronState
-from xiaopaw.cron.service import CronService
-from xiaopaw.models import InboundMessage
+from evopaw.cron.models import CronJob, CronPayload, CronSchedule, CronState
+from evopaw.cron.service import CronService
+from evopaw.models import InboundMessage
 
 
 # ── Test Helpers ──────────────────────────────────────────────

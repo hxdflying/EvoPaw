@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from functools import partial
 from pathlib import Path
 
 import yaml
@@ -156,16 +157,20 @@ async def async_main() -> None:
         max_history_turns=max_history_turns,
         planner_model=planner_model,
         agent_max_turns=agent_max_turns,
+        sub_agent_model=sub_agent_model,
+        sub_agent_max_turns=sub_agent_max_turns,
     )
 
     # ── 7. 构建 Runner ──────────────────────────────────────────────────────
-    runner = Runner(
+    # 生产 Runner 与 TestAPI Runner 仅 sender 不同，其余装配完全一致
+    _make_runner = partial(
+        Runner,
         session_mgr=session_mgr,
-        sender=sender,
         agent_fn=agent_fn,
         downloader=downloader,
         idle_timeout=idle_timeout,
     )
+    runner = _make_runner(sender=sender)
 
     # ── 8. CronService ──────────────────────────────────────────────────────
     (data_dir / "cron").mkdir(parents=True, exist_ok=True)
@@ -214,13 +219,7 @@ async def async_main() -> None:
 
         # 💡 核心点：test runner 使用 CaptureSender，拦截 agent 回复供 HTTP 同步返回
         capture_sender = CaptureSender()
-        test_runner = Runner(
-            session_mgr=session_mgr,
-            sender=capture_sender,
-            agent_fn=agent_fn,
-            downloader=downloader,
-            idle_timeout=idle_timeout,
-        )
+        test_runner = _make_runner(sender=capture_sender)
         test_app = create_test_app(
             runner=test_runner,
             sender=capture_sender,

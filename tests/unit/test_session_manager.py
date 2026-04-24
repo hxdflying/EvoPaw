@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from xiaopaw.session.manager import SessionManager
-from xiaopaw.session.models import MessageEntry, SessionEntry
+from evopaw.session.manager import SessionManager
+from evopaw.session.models import MessageEntry, SessionEntry
 
 
 @pytest.fixture

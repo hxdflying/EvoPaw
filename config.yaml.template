@@ -1,6 +1,6 @@
 workspace:
-  id: "xiaopaw-default"
-  name: "XiaoPaw 工作助手"
+  id: "evopaw-default"
+  name: "EvoPaw 工作助手"
 
 feishu:
   # 必填：从飞书开放平台应用配置中获取
@@ -15,11 +15,12 @@ bot:
   prefix: ""
 
 agent:
-  model: "qwen3-max"
-  max_iter: 50
-  max_input_tokens: 30000
-  sub_agent_model: "qwen3-max"
-  sub_agent_max_iter: 20
+  # 主 Agent 模型（Claude Sonnet 4.6）
+  planner_model: "claude-sonnet-4-6"
+  # Sub-Agent 模型（Claude Haiku 4.5，成本更低）
+  sub_agent_model: "claude-haiku-4-5"
+  max_turns: 50
+  sub_agent_max_turns: 20
   timeout_s: 300
 
 skills:
@@ -27,20 +28,15 @@ skills:
   local_dir: "./skills"
 
 sandbox:
-  url: "http://localhost:8022/mcp"   # sandbox-docker-compose.yaml 映射 8022:8080
+  # Claude Agent SDK 内置工具在容器内执行，无需外部沙箱
+  type: claude_builtin
   workspace_dir: "/workspace"
   timeout_s: 120
-  max_retries: 2
 
 memory:
-  # workspace 目录：Bootstrap 读取 soul.md / user.md / agent.md / memory.md
-  # 初始文件见 workspace-init/（复制到此目录后按实际情况修改）
   workspace_dir: "./data/workspace"
-  # ctx.json / raw.jsonl 存储目录（跨 session 上下文压缩快照）
   ctx_dir: "./data/ctx"
-  # pgvector 连接串（空字符串时跳过搜索记忆索引）
-  # 格式：postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory
-  db_dsn: "${MEMORY_DB_DSN:-postgresql://xiaopaw:xiaopaw123@localhost:5432/xiaopaw_memory}"
+  db_dsn: "${MEMORY_DB_DSN:-postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory}"
 
 session:
   max_history_turns: 20
@@ -59,4 +55,3 @@ debug:
   enable_test_api: false
   test_api_port: 9090
   test_api_host: "127.0.0.1"
-

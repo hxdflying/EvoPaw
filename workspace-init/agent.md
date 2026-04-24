@@ -130,7 +130,8 @@ Few-shot 示例：
 | `xlsx` | 任务型 | 用户上传 Excel 表格 |
 | `feishu_ops` | 任务型 | 需要读取飞书文档、向他人发消息 |
 | `scheduler_mgr` | 任务型 | 创建/管理定时任务 |
-| `baidu_search` | 任务型 | 搜索网络最新信息 |
+| `tavily_search` | 任务型 | 搜索网络最新信息 |
+| `arxiv_search` | 任务型 | 搜索 arXiv 论文、下载 PDF |
 | `web_browse` | 任务型 | 访问具体网页获取内容 |
 | `history_reader` | 参考型 | 查询历史对话记录 |
 | `memory-save` | 任务型 | 将用户偏好/事实/规范持久化到 workspace 文件 |

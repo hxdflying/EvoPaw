@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from xiaopaw.observability.metrics import (
+from evopaw.observability.metrics import (
     export_metrics,
     record_error,
     record_feishu_event,
@@ -60,5 +60,5 @@ class TestExportMetrics:
     def test_data_contains_metric_names(self):
         data, _ = export_metrics()
         text = data.decode()
-        assert "xiaopaw_feishu_events_total" in text
-        assert "xiaopaw_errors_total" in text
+        assert "evopaw_feishu_events_total" in text
+        assert "evopaw_errors_total" in text

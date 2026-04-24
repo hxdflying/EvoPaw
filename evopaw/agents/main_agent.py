@@ -20,7 +20,7 @@ from claude_agent_sdk import (
 )
 
 from evopaw.agents.hooks import build_verbose_hooks
-from evopaw.llm.claude_client import build_main_agent_options
+from evopaw.llm.claude_client import DEFAULT_SUB_AGENT_MODEL, build_main_agent_options
 from evopaw.memory.bootstrap import build_bootstrap_prompt
 from evopaw.memory.context_mgmt import (
     append_session_raw,
@@ -77,24 +77,28 @@ def _format_history(
 
 
 def build_agent_fn(
-    sender:            SenderProtocol,
-    workspace_dir:     Path,
-    ctx_dir:           Path,
-    db_dsn:            str   = "",
-    max_history_turns: int   = _DEFAULT_MAX_HISTORY_TURNS,
-    planner_model:     str   = "claude-sonnet-4-6",
-    agent_max_turns:   int   = 50,
+    sender:              SenderProtocol,
+    workspace_dir:       Path,
+    ctx_dir:             Path,
+    db_dsn:              str  = "",
+    max_history_turns:   int  = _DEFAULT_MAX_HISTORY_TURNS,
+    planner_model:       str  = "claude-sonnet-4-6",
+    agent_max_turns:     int  = 50,
+    sub_agent_model:     str  = DEFAULT_SUB_AGENT_MODEL,
+    sub_agent_max_turns: int  = 20,
 ) -> AgentFn:
     """工厂：返回 Runner 可用的 agent_fn 闭包。
 
     Args:
-        sender:            Feishu Sender（verbose 模式推送推理过程）
-        workspace_dir:     Bootstrap 读取的 workspace 目录
-        ctx_dir:           ctx.json / raw.jsonl 存储目录
-        db_dsn:            pgvector 连接串（为空时跳过索引）
-        max_history_turns: 注入 prompt 的最大历史条数
-        planner_model:     主 Agent 模型名称
-        agent_max_turns:   主 Agent 最大对话轮次
+        sender:              Feishu Sender（verbose 模式推送推理过程）
+        workspace_dir:       Bootstrap 读取的 workspace 目录
+        ctx_dir:             ctx.json / raw.jsonl 存储目录
+        db_dsn:              pgvector 连接串（为空时跳过索引）
+        max_history_turns:   注入 prompt 的最大历史条数
+        planner_model:       主 Agent 模型名称
+        agent_max_turns:     主 Agent 最大对话轮次
+        sub_agent_model:     任务型 Skill 的 Sub-Agent 模型
+        sub_agent_max_turns: Sub-Agent 最大对话轮次
     """
     ctx_dir.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +163,8 @@ def build_agent_fn(
             session_id=session_id,
             routing_key=routing_key,
             history_all=history,
+            sub_agent_model=sub_agent_model,
+            sub_agent_max_turns=sub_agent_max_turns,
         )
 
         # 6. 构建 options（verbose 且非 thread 时推送飞书）

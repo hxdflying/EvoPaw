@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from xiaopaw.memory.indexer import (
+from evopaw.memory.indexer import (
     async_index_turn,
     embed_texts,
     extract_summary_and_tags,
@@ -34,7 +34,7 @@ class TestExtractSummaryAndTags:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"summary": "用户问课程进度", "tags": ["课程", "进度"]}'
 
-        with patch("xiaopaw.memory.indexer._llm_client") as mock_client:
+        with patch("evopaw.memory.indexer._llm_client") as mock_client:
             mock_client.chat.completions.create.return_value = mock_resp
             summary, tags = extract_summary_and_tags("课程到哪了？", "第21课完成了。")
 
@@ -47,7 +47,7 @@ class TestExtractSummaryAndTags:
         mock_resp.choices[0].message.content = (
             '```json\n{"summary": "查询日程", "tags": ["日程"]}\n```'
         )
-        with patch("xiaopaw.memory.indexer._llm_client") as mock_client:
+        with patch("evopaw.memory.indexer._llm_client") as mock_client:
             mock_client.chat.completions.create.return_value = mock_resp
             summary, tags = extract_summary_and_tags("今天有什么安排？", "今天下午3点开会。")
 
@@ -59,7 +59,7 @@ class TestExtractSummaryAndTags:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = "这不是 JSON 内容"
 
-        with patch("xiaopaw.memory.indexer._llm_client") as mock_client:
+        with patch("evopaw.memory.indexer._llm_client") as mock_client:
             mock_client.chat.completions.create.return_value = mock_resp
             summary, tags = extract_summary_and_tags("这是用户消息", "这是助手回复")
 
@@ -73,7 +73,7 @@ class TestExtractSummaryAndTags:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"summary": "s", "tags": []}'
 
-        with patch("xiaopaw.memory.indexer._llm_client") as mock_client:
+        with patch("evopaw.memory.indexer._llm_client") as mock_client:
             mock_client.chat.completions.create.return_value = mock_resp
             extract_summary_and_tags(long_msg, "reply")
 
@@ -88,7 +88,7 @@ class TestExtractSummaryAndTags:
         mock_resp = MagicMock()
         mock_resp.choices[0].message.content = '{"tags": ["工作"]}'
 
-        with patch("xiaopaw.memory.indexer._llm_client") as mock_client:
+        with patch("evopaw.memory.indexer._llm_client") as mock_client:
             mock_client.chat.completions.create.return_value = mock_resp
             summary, tags = extract_summary_and_tags("msg", "reply")
 
@@ -102,7 +102,7 @@ class TestExtractSummaryAndTags:
 class TestEmbedTexts:
     def test_empty_input_returns_empty_list(self):
         """空列表直接返回 []，不调用 API"""
-        with patch("xiaopaw.memory.indexer._get_embed_client") as mock_client:
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client:
             result = embed_texts([])
         assert result == []
         mock_client.assert_not_called()
@@ -116,7 +116,7 @@ class TestEmbedTexts:
         mock_resp = MagicMock()
         mock_resp.data = [mock_item1, mock_item2]
 
-        with patch("xiaopaw.memory.indexer._get_embed_client") as mock_client:
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client:
             mock_client.return_value.embeddings.create.return_value = mock_resp
             result = embed_texts(["文本1", "文本2"])
 
@@ -126,7 +126,7 @@ class TestEmbedTexts:
 
     def test_api_error_propagates(self):
         """API 调用失败时异常向上传播（_index_single_turn 统一 try/except 兜底）"""
-        with patch("xiaopaw.memory.indexer._get_embed_client") as mock_client:
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client:
             mock_client.return_value.embeddings.create.side_effect = RuntimeError("API down")
             with pytest.raises(RuntimeError, match="API down"):
                 embed_texts(["文本"])
@@ -136,7 +136,7 @@ class TestEmbedTexts:
         mock_resp = MagicMock()
         mock_resp.data = []
 
-        with patch("xiaopaw.memory.indexer._get_embed_client") as mock_client:
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client:
             mock_client.return_value.embeddings.create.return_value = mock_resp
             embed_texts(["x"])
 
@@ -220,9 +220,9 @@ class TestUpsertMemory:
 class TestAsyncIndexTurn:
     async def test_empty_db_dsn_skips_all_processing(self):
         """db_dsn 为空时，直接返回，不调用 LLM 或 DB"""
-        with patch("xiaopaw.memory.indexer.extract_summary_and_tags") as mock_extract, \
-             patch("xiaopaw.memory.indexer.embed_texts") as mock_embed, \
-             patch("xiaopaw.memory.indexer._connect_db") as mock_connect:
+        with patch("evopaw.memory.indexer.extract_summary_and_tags") as mock_extract, \
+             patch("evopaw.memory.indexer.embed_texts") as mock_embed, \
+             patch("evopaw.memory.indexer._connect_db") as mock_connect:
             await async_index_turn(
                 session_id="s-001", routing_key="p2p:ou_test",
                 user_message="hi", assistant_reply="hello",
@@ -252,10 +252,10 @@ class TestAsyncIndexTurn:
         def fake_upsert(conn, record):
             call_order.append("upsert")
 
-        with patch("xiaopaw.memory.indexer.extract_summary_and_tags", fake_extract), \
-             patch("xiaopaw.memory.indexer.embed_texts", fake_embed), \
-             patch("xiaopaw.memory.indexer.upsert_memory", fake_upsert), \
-             patch("xiaopaw.memory.indexer._connect_db", return_value=mock_conn):
+        with patch("evopaw.memory.indexer.extract_summary_and_tags", fake_extract), \
+             patch("evopaw.memory.indexer.embed_texts", fake_embed), \
+             patch("evopaw.memory.indexer.upsert_memory", fake_upsert), \
+             patch("evopaw.memory.indexer._connect_db", return_value=mock_conn):
             await async_index_turn(
                 session_id="s-001", routing_key="p2p:ou_test",
                 user_message="用户消息", assistant_reply="助手回复",
@@ -266,7 +266,7 @@ class TestAsyncIndexTurn:
 
     async def test_db_connection_error_does_not_propagate(self):
         """DB 连接失败时，只 log warning，不把异常传播给调用方"""
-        with patch("xiaopaw.memory.indexer._connect_db",
+        with patch("evopaw.memory.indexer._connect_db",
                    side_effect=Exception("DB down")):
             # 不应抛异常
             await async_index_turn(
@@ -287,12 +287,12 @@ class TestAsyncIndexTurn:
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("xiaopaw.memory.indexer.extract_summary_and_tags",
+        with patch("evopaw.memory.indexer.extract_summary_and_tags",
                    return_value=("摘要", ["tag"])), \
-             patch("xiaopaw.memory.indexer.embed_texts",
+             patch("evopaw.memory.indexer.embed_texts",
                    return_value=[[0.1] * 1024, [0.2] * 1024]), \
-             patch("xiaopaw.memory.indexer.upsert_memory", fake_upsert), \
-             patch("xiaopaw.memory.indexer._connect_db", return_value=mock_conn):
+             patch("evopaw.memory.indexer.upsert_memory", fake_upsert), \
+             patch("evopaw.memory.indexer._connect_db", return_value=mock_conn):
             await async_index_turn(
                 session_id="s-check",
                 routing_key="p2p:ou_check",
@@ -328,12 +328,12 @@ class TestAsyncIndexTurn:
             turn_ts=1000, db_dsn="postgresql://test"
         )
         for _ in range(2):
-            with patch("xiaopaw.memory.indexer.extract_summary_and_tags",
+            with patch("evopaw.memory.indexer.extract_summary_and_tags",
                        return_value=("s", [])), \
-                 patch("xiaopaw.memory.indexer.embed_texts",
+                 patch("evopaw.memory.indexer.embed_texts",
                        return_value=[[0.1] * 1024, [0.2] * 1024]), \
-                 patch("xiaopaw.memory.indexer.upsert_memory", capture_upsert), \
-                 patch("xiaopaw.memory.indexer._connect_db", return_value=mock_conn):
+                 patch("evopaw.memory.indexer.upsert_memory", capture_upsert), \
+                 patch("evopaw.memory.indexer._connect_db", return_value=mock_conn):
                 await async_index_turn(**params)
 
         assert len(ids) == 2
@@ -346,12 +346,12 @@ class TestAsyncIndexTurn:
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("xiaopaw.memory.indexer.extract_summary_and_tags",
+        with patch("evopaw.memory.indexer.extract_summary_and_tags",
                    return_value=("s", [])), \
-             patch("xiaopaw.memory.indexer.embed_texts",
+             patch("evopaw.memory.indexer.embed_texts",
                    return_value=[[0.1] * 1024, [0.2] * 1024]), \
-             patch("xiaopaw.memory.indexer.upsert_memory"), \
-             patch("xiaopaw.memory.indexer._connect_db", return_value=mock_conn):
+             patch("evopaw.memory.indexer.upsert_memory"), \
+             patch("evopaw.memory.indexer._connect_db", return_value=mock_conn):
             await async_index_turn(
                 session_id="s-001", routing_key="p2p:test",
                 user_message="hi", assistant_reply="hello",

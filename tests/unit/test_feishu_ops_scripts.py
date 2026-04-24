@@ -21,7 +21,7 @@ import pytest
 
 # ── scripts 目录注入 ──────────────────────────────────────────────────────────
 
-SCRIPTS_DIR = Path(__file__).parent.parent.parent / "xiaopaw" / "skills" / "feishu_ops" / "scripts"
+SCRIPTS_DIR = Path(__file__).parent.parent.parent / "evopaw" / "skills" / "feishu_ops" / "scripts"
 
 
 def _import_script(name: str):

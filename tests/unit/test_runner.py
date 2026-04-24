@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from xiaopaw.models import Attachment, InboundMessage
-from xiaopaw.runner import Runner
-from xiaopaw.session.manager import SessionManager
-from xiaopaw.session.models import MessageEntry
+from evopaw.models import Attachment, InboundMessage
+from evopaw.runner import Runner
+from evopaw.session.manager import SessionManager
+from evopaw.session.models import MessageEntry
 
 
 # ── Test Helpers ──────────────────────────────────────────────

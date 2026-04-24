@@ -15,7 +15,7 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from xiaopaw.feishu.sender import FeishuSender
+from evopaw.feishu.sender import FeishuSender
 
 
 # ── Test Helpers ──────────────────────────────────────────────

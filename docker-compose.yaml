@@ -1,0 +1,37 @@
+services:
+  evopaw-main:
+    build: .
+    container_name: evopaw-main
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./evopaw/skills:/app/evopaw/skills:ro
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: evopaw-pgvector
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: evopaw_memory
+      POSTGRES_USER: evopaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evopaw123}
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - pgvector_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evopaw -d evopaw_memory"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgvector_data:

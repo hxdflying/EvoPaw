@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xiaopaw.feishu.downloader import FeishuDownloader
-from xiaopaw.models import Attachment
+from evopaw.feishu.downloader import FeishuDownloader
+from evopaw.models import Attachment
 
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -74,6 +74,21 @@ class TestFeishuDownloaderDownload:
         assert result is not None
         assert result.name == "report.pdf"
         assert result.read_bytes() == b"pdf-bytes"
+
+    async def test_audio_download_success_returns_path(self, tmp_path):
+        client = _make_client(data=b"opus-bytes")
+        dl = FeishuDownloader(client=client, data_dir=tmp_path)
+        att = _make_attachment(
+            msg_type="audio",
+            file_key="audio_001",
+            file_name="audio_001.audio",
+        )
+
+        result = await dl.download("msg_audio_001", att, "s-audio")
+
+        assert result is not None
+        assert result.name == "audio_001.audio"
+        assert result.read_bytes() == b"opus-bytes"
 
     async def test_api_failure_returns_none(self, tmp_path):
         """API 返回失败（success() = False）时返回 None"""

@@ -13,10 +13,10 @@ import asyncio
 
 import pytest
 
-from xiaopaw.models import InboundMessage
-from xiaopaw.runner import Runner
-from xiaopaw.session.manager import SessionManager
-from xiaopaw.session.models import MessageEntry
+from evopaw.models import InboundMessage
+from evopaw.runner import Runner
+from evopaw.session.manager import SessionManager
+from evopaw.session.models import MessageEntry
 
 
 # ── Test Helpers ──────────────────────────────────────────────
@@ -255,14 +255,14 @@ class TestRunnerLoadingFallback:
             await runner.shutdown()
 
 
-# ── Slash 命令使用 send_text ────────────────────────────────────
+# ── Slash 命令使用 send（卡片格式统一） ──────────────────────────
 
 
-class TestRunnerSlashUseSendText:
-    """slash 命令回复应使用 send_text（纯文本），不经过 send_thinking"""
+class TestRunnerSlashUseSend:
+    """slash 命令回复应使用 send()，不经过 send_thinking"""
 
-    async def test_slash_help_uses_send_text(self, session_mgr):
-        """/help 应通过 send_text 回复，不调用 send_thinking"""
+    async def test_slash_help_uses_send(self, session_mgr):
+        """/help 应通过 send 回复，不调用 send_thinking"""
         sender = MockSenderWithCard()
         runner = Runner(
             session_mgr=session_mgr,
@@ -276,12 +276,12 @@ class TestRunnerSlashUseSendText:
 
             assert "/new" in reply
             assert len(sender.send_thinking_calls) == 0
-            assert len(sender.send_text_calls) == 1
+            assert len(sender.send_calls) == 1
         finally:
             await runner.shutdown()
 
-    async def test_slash_new_uses_send_text(self, session_mgr):
-        """/new 应通过 send_text 回复"""
+    async def test_slash_new_uses_send(self, session_mgr):
+        """/new 应通过 send 回复"""
         sender = MockSenderWithCard()
         runner = Runner(
             session_mgr=session_mgr,
@@ -292,13 +292,13 @@ class TestRunnerSlashUseSendText:
         try:
             await runner.dispatch(make_inbound(content="/new"))
             await sender.wait_for_reply()
-            assert len(sender.send_text_calls) == 1
+            assert len(sender.send_calls) == 1
             assert len(sender.send_thinking_calls) == 0
         finally:
             await runner.shutdown()
 
-    async def test_slash_status_uses_send_text(self, session_mgr):
-        """/status 应通过 send_text 回复"""
+    async def test_slash_status_uses_send(self, session_mgr):
+        """/status 应通过 send 回复"""
         sender = MockSenderWithCard()
         runner = Runner(
             session_mgr=session_mgr,
@@ -313,14 +313,14 @@ class TestRunnerSlashUseSendText:
             await runner.dispatch(make_inbound(content="/status", msg_id="om_002"))
             await sender.wait_for_reply()
 
-            # 只有最后的 /status 回复走 send_text
-            text_contents = [c for _, c, _ in sender.send_text_calls]
-            assert any("s-" in c for c in text_contents)
+            # /status 回复走 send
+            send_contents = [c for _, c, _ in sender.send_calls]
+            assert any("s-" in c for c in send_contents)
         finally:
             await runner.shutdown()
 
-    async def test_slash_uses_send_text_not_send(self, session_mgr):
-        """slash 命令回复不走 send()（防止误用 interactive 卡片）"""
+    async def test_slash_uses_send_not_send_thinking(self, session_mgr):
+        """slash 命令回复不走 send_thinking（直接发送，无 Loading 卡片）"""
         sender = MockSenderWithCard()
         runner = Runner(
             session_mgr=session_mgr,
@@ -332,13 +332,14 @@ class TestRunnerSlashUseSendText:
             await runner.dispatch(make_inbound(content="/verbose on"))
             await sender.wait_for_reply()
 
-            # send() 不应被调用（slash 命令走 send_text）
-            assert len(sender.send_calls) == 0
+            # send_thinking 不应被调用（slash 命令直接走 send）
+            assert len(sender.send_thinking_calls) == 0
+            assert len(sender.send_calls) == 1
         finally:
             await runner.shutdown()
 
-    async def test_slash_send_text_correct_routing_key(self, session_mgr):
-        """send_text 使用正确的 routing_key"""
+    async def test_slash_send_correct_routing_key(self, session_mgr):
+        """send 使用正确的 routing_key"""
         sender = MockSenderWithCard()
         runner = Runner(
             session_mgr=session_mgr,
@@ -352,7 +353,7 @@ class TestRunnerSlashUseSendText:
             )
             await sender.wait_for_reply()
 
-            rk, _, _ = sender.send_text_calls[0]
+            rk, _, _ = sender.send_calls[0]
             assert rk == "group:oc_test"
         finally:
             await runner.shutdown()

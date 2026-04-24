@@ -5,9 +5,9 @@ services:
     ports:
       - "5432:5432"                  # 默认 postgres 端口
     environment:
-      POSTGRES_DB:       xiaopaw_memory
-      POSTGRES_USER:     xiaopaw
-      POSTGRES_PASSWORD: xiaopaw123
+      POSTGRES_DB:       evopaw_memory
+      POSTGRES_USER:     evopaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evopaw123}
     volumes:
       # 💡 核心点：schema.sql 放在 initdb 目录，容器首次启动时自动执行
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
@@ -15,7 +15,7 @@ services:
       - pgvector_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U xiaopaw -d xiaopaw_memory"]
+      test: ["CMD-SHELL", "pg_isready -U evopaw -d evopaw_memory"]
       interval: 10s
       timeout: 5s
       retries: 5

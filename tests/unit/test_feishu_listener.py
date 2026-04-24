@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xiaopaw.feishu.listener import FeishuListener, _XiaoPawEventHandler, run_forever
-from xiaopaw.models import Attachment, InboundMessage
+from evopaw.feishu.listener import FeishuListener, _EvoPawEventHandler, run_forever
+from evopaw.models import Attachment, InboundMessage
 
 
 # ── 辅助：构造 bot.added 事件 payload ─────────────────────────────────────────
@@ -54,11 +54,11 @@ def _make_im_receive_payload(
     return json.dumps(data).encode()
 
 
-class TestXiaoPawEventHandlerInvalidInput:
+class TestEvoPawEventHandlerInvalidInput:
     async def test_invalid_json_payload_does_not_raise(self):
         loop = asyncio.get_event_loop()
         on_msg = asyncio.coroutine(lambda _: None) if False else AsyncMockFn()
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg.call)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg.call)
         handler.do_without_validation(b"not-valid-json")
         # no exception = pass
 
@@ -69,7 +69,7 @@ class TestXiaoPawEventHandlerInvalidInput:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
         payload = json.dumps({
             "header": {"event_type": "bot.events.v1"},
             "event": {},
@@ -85,7 +85,7 @@ class TestXiaoPawEventHandlerInvalidInput:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
         handler.do_without_validation(_make_im_receive_payload())
         await asyncio.sleep(0.1)
 
@@ -102,7 +102,7 @@ class TestXiaoPawEventHandlerInvalidInput:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
         handler.do_without_validation(
             _make_im_receive_payload(chat_type="group", chat_id="oc_group_001")
         )
@@ -118,7 +118,7 @@ class TestXiaoPawEventHandlerInvalidInput:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
         handler.do_without_validation(
             _make_im_receive_payload(create_time="not_a_number")
         )
@@ -223,6 +223,25 @@ class TestFeishuListenerExtractAttachment:
         content = json.dumps({"file_key": "", "file_name": "report.pdf"})
         assert FeishuListener._extract_attachment("file", content) is None
 
+    def test_audio_with_key_returns_attachment(self):
+        content = json.dumps({"file_key": "audio_001", "duration": 3200})
+        result = FeishuListener._extract_attachment("audio", content)
+        assert result is not None
+        assert result.msg_type == "audio"
+        assert result.file_key == "audio_001"
+        assert result.file_name == "audio_001.audio"
+        assert result.duration_ms == 3200
+
+    def test_audio_without_key_returns_none(self):
+        content = json.dumps({"duration": 1500})
+        assert FeishuListener._extract_attachment("audio", content) is None
+
+    def test_audio_with_invalid_duration_sets_none(self):
+        content = json.dumps({"file_key": "audio_002", "duration": "oops"})
+        result = FeishuListener._extract_attachment("audio", content)
+        assert result is not None
+        assert result.duration_ms is None
+
 
 # ── FeishuListener init & start ────────────────────────────────────────────────
 
@@ -231,13 +250,13 @@ class TestFeishuListenerInit:
     """FeishuListener.__init__ 测试（覆盖 lines 126-127）"""
 
     def test_init_creates_ws_client(self):
-        with patch("xiaopaw.feishu.listener.WSClient") as mock_ws_cls, \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler") as mock_handler_cls:
+        with patch("evopaw.feishu.listener.WSClient") as mock_ws_cls, \
+             patch("evopaw.feishu.listener._EvoPawEventHandler") as mock_handler_cls:
             loop = MagicMock()
             on_msg = AsyncMock()
             listener = FeishuListener("app_id_test", "app_secret_test", on_msg, loop)
 
-            # _XiaoPawEventHandler 应以 loop 和 on_message 构建（以及可选的新参数）
+            # _EvoPawEventHandler 应以 loop 和 on_message 构建（以及可选的新参数）
             mock_handler_cls.assert_called_once()
             handler_kwargs = mock_handler_cls.call_args.kwargs
             assert handler_kwargs["loop"] is loop
@@ -253,8 +272,8 @@ class TestFeishuListenerStart:
     """FeishuListener.start() 测试（覆盖 lines 136-140）"""
 
     async def test_start_runs_ws_client_in_executor(self):
-        with patch("xiaopaw.feishu.listener.WSClient") as mock_ws_cls, \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler"):
+        with patch("evopaw.feishu.listener.WSClient") as mock_ws_cls, \
+             patch("evopaw.feishu.listener._EvoPawEventHandler"):
             loop = asyncio.get_running_loop()
             mock_ws_instance = MagicMock()
             mock_ws_cls.return_value = mock_ws_instance
@@ -287,7 +306,7 @@ class TestRunForever:
         assert listener.start.call_count >= 1
 
 
-# ── _XiaoPawEventHandler exception branch ─────────────────────────────────────
+# ── _EvoPawEventHandler exception branch ─────────────────────────────────────
 
 
 class TestHandlerExceptionInBody:
@@ -295,11 +314,11 @@ class TestHandlerExceptionInBody:
 
     async def test_exception_in_handler_body_does_not_raise(self):
         loop = asyncio.get_event_loop()
-        handler = _XiaoPawEventHandler(loop=loop, on_message=AsyncMock())
+        handler = _EvoPawEventHandler(loop=loop, on_message=AsyncMock())
 
         # 让 resolve_routing_key 抛异常，触发 except 分支
         with patch(
-            "xiaopaw.feishu.listener.resolve_routing_key",
+            "evopaw.feishu.listener.resolve_routing_key",
             side_effect=RuntimeError("unexpected error"),
         ):
             # should NOT raise — exception is caught and logged
@@ -504,7 +523,7 @@ class TestPostMessageDispatch:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(loop=loop, on_message=on_msg)
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
 
         post_content = json.dumps({
             "zh_cn": {
@@ -536,7 +555,7 @@ class TestBotAddedCallback:
         async def on_bot_added(chat_id: str, group_name: str) -> None:
             received.append((chat_id, group_name))
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=AsyncMock(),
             on_bot_added=on_bot_added,
@@ -550,7 +569,7 @@ class TestBotAddedCallback:
     async def test_on_bot_added_none_silently_ignored(self):
         """on_bot_added 为 None（默认值）时，入群事件静默忽略，不报错"""
         loop = asyncio.get_event_loop()
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=AsyncMock(),
             on_bot_added=None,
@@ -571,7 +590,7 @@ class TestBotAddedCallback:
         async def on_bot_added(chat_id: str, group_name: str) -> None:
             received_added.append((chat_id, group_name))
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             on_bot_added=on_bot_added,
@@ -590,7 +609,7 @@ class TestBotAddedCallback:
         async def on_bot_added(chat_id: str, group_name: str) -> None:
             received.append((chat_id, group_name))
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=AsyncMock(),
             on_bot_added=on_bot_added,
@@ -613,8 +632,8 @@ class TestFeishuListenerInitWithBotAdded:
 
     def test_init_accepts_on_bot_added_param(self):
         """FeishuListener 应接受 on_bot_added 可选参数"""
-        with patch("xiaopaw.feishu.listener.WSClient"), \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler") as mock_handler_cls:
+        with patch("evopaw.feishu.listener.WSClient"), \
+             patch("evopaw.feishu.listener._EvoPawEventHandler") as mock_handler_cls:
             loop = MagicMock()
             on_msg = AsyncMock()
             on_bot_added = AsyncMock()
@@ -627,14 +646,14 @@ class TestFeishuListenerInitWithBotAdded:
                 on_bot_added=on_bot_added,
             )
 
-            # _XiaoPawEventHandler 应接收到 on_bot_added 参数
+            # _EvoPawEventHandler 应接收到 on_bot_added 参数
             call_kwargs = mock_handler_cls.call_args.kwargs
             assert call_kwargs["on_bot_added"] is on_bot_added
 
     def test_init_default_on_bot_added_is_none(self):
         """不传 on_bot_added 时，默认为 None"""
-        with patch("xiaopaw.feishu.listener.WSClient"), \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler") as mock_handler_cls:
+        with patch("evopaw.feishu.listener.WSClient"), \
+             patch("evopaw.feishu.listener._EvoPawEventHandler") as mock_handler_cls:
             loop = MagicMock()
             FeishuListener(
                 app_id="app_id",
@@ -662,7 +681,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=["oc_allowed"],
@@ -682,7 +701,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=["oc_allowed"],
@@ -702,7 +721,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=["oc_some_group"],  # 白名单中没有 p2p chat_id
@@ -722,7 +741,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=[],
@@ -742,7 +761,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=None,
@@ -762,7 +781,7 @@ class TestAllowedChats:
         async def on_bot_added(chat_id: str, group_name: str) -> None:
             received.append((chat_id, group_name))
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=AsyncMock(),
             on_bot_added=on_bot_added,
@@ -781,7 +800,7 @@ class TestAllowedChats:
         async def on_bot_added(chat_id: str, group_name: str) -> None:
             received.append((chat_id, group_name))
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=AsyncMock(),
             on_bot_added=on_bot_added,
@@ -801,7 +820,7 @@ class TestAllowedChats:
         async def on_msg(inbound: InboundMessage) -> None:
             received.append(inbound)
 
-        handler = _XiaoPawEventHandler(
+        handler = _EvoPawEventHandler(
             loop=loop,
             on_message=on_msg,
             allowed_chats=["oc_a", "oc_b", "oc_c"],
@@ -819,9 +838,9 @@ class TestFeishuListenerInitWithAllowedChats:
     """FeishuListener.__init__ 接受 allowed_chats 参数"""
 
     def test_init_passes_allowed_chats_to_handler(self):
-        """FeishuListener 应将 allowed_chats 传递给 _XiaoPawEventHandler"""
-        with patch("xiaopaw.feishu.listener.WSClient"), \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler") as mock_handler_cls:
+        """FeishuListener 应将 allowed_chats 传递给 _EvoPawEventHandler"""
+        with patch("evopaw.feishu.listener.WSClient"), \
+             patch("evopaw.feishu.listener._EvoPawEventHandler") as mock_handler_cls:
             loop = MagicMock()
             FeishuListener(
                 app_id="app_id",
@@ -835,8 +854,8 @@ class TestFeishuListenerInitWithAllowedChats:
 
     def test_init_default_allowed_chats_is_none(self):
         """不传 allowed_chats 时，默认为 None"""
-        with patch("xiaopaw.feishu.listener.WSClient"), \
-             patch("xiaopaw.feishu.listener._XiaoPawEventHandler") as mock_handler_cls:
+        with patch("evopaw.feishu.listener.WSClient"), \
+             patch("evopaw.feishu.listener._EvoPawEventHandler") as mock_handler_cls:
             loop = MagicMock()
             FeishuListener(
                 app_id="app_id",

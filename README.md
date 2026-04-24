@@ -136,9 +136,9 @@ feishu:
 
 agent:
   planner_model: "claude-sonnet-4-6"     # 主 Agent 模型
-  sub_agent_model: "claude-haiku-4-5"    # ⚠️ 当前未接入，改值不生效（见 docs/redundancy-audit-2026-04-21.md #7）
+  sub_agent_model: "claude-haiku-4-5"    # 任务型 Skill 的 Sub-Agent 模型
   max_turns: 50
-  sub_agent_max_turns: 20                # ⚠️ 当前未接入，改值不生效（见 docs/redundancy-audit-2026-04-21.md #7）
+  sub_agent_max_turns: 20                # Sub-Agent 最大对话轮次
   timeout_s: 300
 
 memory:

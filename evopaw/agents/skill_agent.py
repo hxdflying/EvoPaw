@@ -16,7 +16,7 @@ from claude_agent_sdk import (
     query,
 )
 
-from evopaw.llm.claude_client import build_sub_agent_options
+from evopaw.llm.claude_client import DEFAULT_SUB_AGENT_MODEL, build_sub_agent_options
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,8 @@ async def run_skill_agent(
     skill_instructions: str,
     task_context: str,
     session_path: str,
+    model: str = DEFAULT_SUB_AGENT_MODEL,
+    max_turns: int = 20,
 ) -> str:
     """运行任务型 Skill 的 Sub-Agent。
 
@@ -37,15 +39,22 @@ async def run_skill_agent(
         skill_instructions: SKILL.md 正文 + execution_directive（完整指令）
         task_context: 用户任务描述（作为 prompt）
         session_path: session workspace 路径（作为 cwd）
+        model: Sub-Agent 使用的模型
+        max_turns: Sub-Agent 最大对话轮次
 
     Returns:
         Sub-Agent 的文本回复；异常时返回错误提示。
     """
-    logger.info("run_skill_agent: skill=%s, cwd=%s", skill_name, session_path)
+    logger.info(
+        "run_skill_agent: skill=%s, cwd=%s, model=%s, max_turns=%d",
+        skill_name, session_path, model, max_turns,
+    )
 
     options = build_sub_agent_options(
         system_prompt=skill_instructions,
         cwd=session_path,
+        model=model,
+        max_turns=max_turns,
     )
 
     try:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from xiaopaw.feishu.sender import FeishuSender
+from evopaw.feishu.sender import FeishuSender
 
 
 def _make_client(success: bool = True) -> MagicMock:

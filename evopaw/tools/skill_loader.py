@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from evopaw.llm.claude_client import DEFAULT_SUB_AGENT_MODEL
 from evopaw.session.models import MessageEntry
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,6 @@ def _build_skill_registry(skills_dir: Path) -> dict[str, dict[str, Any]]:
 def _build_description_xml(
     registry: dict[str, dict[str, Any]],
     session_id: str,
-    skills_dir: Path,
 ) -> str:
     """构建工具 description 的 XML 列表。"""
     xml_parts = ["<available_skills>"]
@@ -210,6 +210,8 @@ def build_skill_loader_server(
     routing_key: str = "",
     history_all: list[MessageEntry] | None = None,
     skills_dir: Path | None = None,
+    sub_agent_model: str = DEFAULT_SUB_AGENT_MODEL,
+    sub_agent_max_turns: int = 20,
 ):
     """工厂：构建 skill_loader MCP server，绑定当前 session。
 
@@ -221,6 +223,8 @@ def build_skill_loader_server(
         routing_key: 飞书消息路由键（供 feishu_ops 等 Skill 使用）
         history_all: 完整对话历史（供 history_reader 内联读取）
         skills_dir: skills 目录路径（测试时覆盖）
+        sub_agent_model: 任务型 Skill 的 Sub-Agent 模型（透传至 run_skill_agent）
+        sub_agent_max_turns: Sub-Agent 最大对话轮次（透传至 run_skill_agent）
 
     Returns:
         Claude Agent SDK MCP server 配置对象
@@ -232,7 +236,7 @@ def build_skill_loader_server(
 
     # 构建工具描述
     if registry:
-        description = _build_description_xml(registry, session_id, _skills_dir)
+        description = _build_description_xml(registry, session_id)
     else:
         description = "SkillLoaderTool 已初始化，但暂无可用 Skill。"
 
@@ -297,6 +301,8 @@ def build_skill_loader_server(
             skill_instructions=instructions,
             task_context=task_context,
             session_path=_workspace_root,
+            model=sub_agent_model,
+            max_turns=sub_agent_max_turns,
         )
         return {"content": [{"type": "text", "text": result_text}]}
 
