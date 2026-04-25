@@ -20,12 +20,23 @@ class CaptureSender:
 
     def __init__(self) -> None:
         self._futures: dict[str, asyncio.Future[str]] = {}
+        self._skills_by_root: dict[str, list[str]] = {}
 
     def register(self, msg_id: str) -> asyncio.Future[str]:
         """注册一个 msg_id，返回对应的 Future。重复注册会覆盖旧 Future。"""
         fut = asyncio.get_running_loop().create_future()
         self._futures[msg_id] = fut
         return fut
+
+    def record_skills(self, root_id: str, skills: list[str]) -> None:
+        """主 Agent 调用，记录本轮触发的 Skill 名（按调用顺序）。"""
+        if not root_id:
+            return
+        self._skills_by_root[root_id] = list(skills)
+
+    def pop_skills(self, msg_id: str) -> list[str]:
+        """TestAPI 在收到回复后调用，取出并清理。未记录时返回空列表。"""
+        return self._skills_by_root.pop(msg_id, [])
 
     async def send(
         self, routing_key: str, content: str, root_id: str

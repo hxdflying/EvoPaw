@@ -31,6 +31,7 @@ from evopaw.feishu.downloader import FeishuDownloader
 from evopaw.feishu.listener import FeishuListener, run_forever
 from evopaw.feishu.sender import FeishuSender
 from evopaw.llm import check_claude_cli
+from evopaw.memory.indexer import shutdown_index_clients
 from evopaw.observability.logging_config import setup_logging
 from evopaw.observability.metrics_server import start_metrics_server
 from evopaw.runner import Runner
@@ -259,9 +260,7 @@ async def async_main() -> None:
         on_message=runner.dispatch,
         loop=loop,
         allowed_chats=allowed_chats if allowed_chats else None,
-        # TODO: 实现 on_bot_added — 向新群发送欢迎卡片
-        # on_bot_added=lambda chat_id, name: sender.send_welcome_card(chat_id, name),
-        on_bot_added=None,
+        on_bot_added=sender.send_welcome_card,
     )
 
     logger.info("EvoPaw ready. test_api=%s", enable_test_api)
@@ -300,7 +299,11 @@ async def async_main() -> None:
         )
         logger.info("TestAPI enabled: http://%s:%d", test_api_host, test_api_port)
 
-    await asyncio.gather(*tasks)
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        # 优雅关闭：关闭 memory.indexer 持有的 OpenAI client（httpx 连接池）。
+        shutdown_index_clients()
 
 
 async def _run_test_api(app: object, host: str, port: int) -> None:

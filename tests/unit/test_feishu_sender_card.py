@@ -324,6 +324,68 @@ class TestSendText:
         client.im.v1.message.areply.assert_not_called()
 
 
+# ── send_welcome_card ──────────────────────────────────────────
+
+
+class TestSendWelcomeCard:
+    """send_welcome_card: Bot 入群欢迎卡片"""
+
+    async def test_calls_acreate_with_chat_id(self):
+        """通过 acreate 发送到指定 chat_id（receive_id_type=chat_id）"""
+        client = _make_client()
+        sender = FeishuSender(client=client)
+        await sender.send_welcome_card("oc_chat001", "工程团队")
+        client.im.v1.message.acreate.assert_called_once()
+
+        req = client.im.v1.message.acreate.call_args[0][0]
+        assert req.receive_id_type == "chat_id"
+        assert req.request_body.receive_id == "oc_chat001"
+
+    async def test_uses_interactive_msg_type(self):
+        """消息类型为 interactive"""
+        client = _make_client()
+        sender = FeishuSender(client=client)
+        await sender.send_welcome_card("oc_001", "团队")
+
+        req = client.im.v1.message.acreate.call_args[0][0]
+        assert req.request_body.msg_type == "interactive"
+
+    async def test_card_contains_group_name(self):
+        """卡片内容包含 group_name"""
+        client = _make_client()
+        sender = FeishuSender(client=client)
+        await sender.send_welcome_card("oc_001", "工程团队")
+
+        req = client.im.v1.message.acreate.call_args[0][0]
+        card_json = json.loads(req.request_body.content)
+        text_content = card_json["elements"][0]["text"]["content"]
+        assert "工程团队" in text_content
+
+    async def test_empty_group_name_does_not_raise(self):
+        """group_name 为空串时不抛异常，仍发卡片"""
+        client = _make_client()
+        sender = FeishuSender(client=client)
+        await sender.send_welcome_card("oc_001", "")
+        client.im.v1.message.acreate.assert_called_once()
+
+    async def test_api_failure_does_not_raise(self):
+        """API 失败时静默吞掉，不向上抛异常"""
+        client = _make_client(success=False)
+        sender = FeishuSender(client=client)
+        # 不应抛异常
+        await sender.send_welcome_card("oc_001", "团队")
+
+    async def test_exception_does_not_raise(self):
+        """acreate 抛异常时被吞掉"""
+        client = MagicMock()
+        client.im.v1.message.acreate = AsyncMock(
+            side_effect=RuntimeError("network error")
+        )
+        sender = FeishuSender(client=client)
+        # 不应抛异常
+        await sender.send_welcome_card("oc_001", "团队")
+
+
 # ── send (改为 interactive 卡片) ────────────────────────────────
 
 

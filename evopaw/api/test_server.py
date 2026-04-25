@@ -121,7 +121,7 @@ async def _handle_message(request: web.Request) -> web.Response:
         reply=reply,
         session_id=session_id,
         duration_ms=duration_ms,
-        skills_called=[],  # TODO: 从 Trace 获取
+        skills_called=sender.pop_skills(msg_id),
     )
     resp = web.json_response(resp_obj.model_dump())
     http_requests_total.labels(path=path, method=method, status_code=str(resp.status)).inc()

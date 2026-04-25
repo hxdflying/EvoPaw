@@ -577,3 +577,143 @@ class TestMemoryIntegration:
                 await fn("hi", [], "sid_no_ctx")
 
         assert "<long_term_context>" not in captured_prompt["value"]
+
+
+# ── skills_called 收集（接 Trace 取值）────────────────────────────
+
+
+class _FakeToolUseBlock:
+    """模拟 ToolUseBlock：name + input"""
+
+    def __init__(self, name: str, input_data: dict):
+        self.name = name
+        self.input = input_data
+
+
+class _FakeAssistantMessage:
+    """模拟 AssistantMessage：content 为 block 列表"""
+
+    def __init__(self, content: list):
+        self.content = content
+
+
+class TestSkillsCalled:
+    """主 Agent 在 SDK 消息流里收集 skill_loader tool_use，并通过 record_skills 上报"""
+
+    @pytest.mark.asyncio
+    async def test_collects_skill_names_and_pushes_to_sender(self, tmp_path):
+        """skill_loader 的 tool_use 块按调用顺序累积，pushed via sender.record_skills"""
+        sender = MagicMock()
+        sender.record_skills = MagicMock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+        fn = build_agent_fn(sender, workspace_dir=ws, ctx_dir=ctx)
+
+        tool_use_a = _FakeToolUseBlock(
+            "mcp__evopaw__skill_loader", {"skill_name": "tavily_search"}
+        )
+        tool_use_b = _FakeToolUseBlock(
+            "mcp__evopaw__skill_loader", {"skill_name": "memory-save"}
+        )
+        non_skill_tool = _FakeToolUseBlock("Bash", {"command": "ls"})
+        assistant_msg = _FakeAssistantMessage([tool_use_a, non_skill_tool, tool_use_b])
+
+        mock_result = MagicMock()
+        mock_result.result = "done"
+
+        async def fake_query(**kwargs):
+            yield assistant_msg
+            yield mock_result
+
+        with patch("evopaw.agents.main_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.main_agent.build_bootstrap_prompt", return_value=""), \
+             patch("evopaw.agents.main_agent.build_main_agent_options") as mock_opts, \
+             patch("evopaw.agents.main_agent.AssistantMessage", _FakeAssistantMessage), \
+             patch("evopaw.agents.main_agent.ToolUseBlock", _FakeToolUseBlock), \
+             patch("evopaw.agents.main_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            await fn("hi", [], "sid_001", root_id="msg_root_001")
+
+        sender.record_skills.assert_called_once_with(
+            "msg_root_001", ["tavily_search", "memory-save"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_skill_calls_pushes_empty_list(self, tmp_path):
+        """无 skill 调用时仍上报空列表"""
+        sender = MagicMock()
+        sender.record_skills = MagicMock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+        fn = build_agent_fn(sender, workspace_dir=ws, ctx_dir=ctx)
+
+        mock_result = MagicMock()
+        mock_result.result = "纯文本回复"
+
+        async def fake_query(**kwargs):
+            yield mock_result
+
+        with patch("evopaw.agents.main_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.main_agent.build_bootstrap_prompt", return_value=""), \
+             patch("evopaw.agents.main_agent.build_main_agent_options") as mock_opts, \
+             patch("evopaw.agents.main_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            await fn("hi", [], "sid_001", root_id="msg_root_002")
+
+        sender.record_skills.assert_called_once_with("msg_root_002", [])
+
+    @pytest.mark.asyncio
+    async def test_sender_without_record_skills_method_no_error(self, tmp_path):
+        """sender 不实现 record_skills 时（普通 FeishuSender），不报错"""
+        sender = MagicMock(spec=[])  # 完全没有 record_skills 属性
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+        fn = build_agent_fn(sender, workspace_dir=ws, ctx_dir=ctx)
+
+        mock_result = MagicMock()
+        mock_result.result = "ok"
+
+        async def fake_query(**kwargs):
+            yield mock_result
+
+        with patch("evopaw.agents.main_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.main_agent.build_bootstrap_prompt", return_value=""), \
+             patch("evopaw.agents.main_agent.build_main_agent_options") as mock_opts, \
+             patch("evopaw.agents.main_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            # 不应抛异常
+            result = await fn("hi", [], "sid_001", root_id="msg_root_003")
+
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_no_record_when_root_id_empty(self, tmp_path):
+        """root_id 为空时跳过 record_skills（避免污染存储）"""
+        sender = MagicMock()
+        sender.record_skills = MagicMock()
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        ctx = tmp_path / "ctx"
+        ctx.mkdir()
+        fn = build_agent_fn(sender, workspace_dir=ws, ctx_dir=ctx)
+
+        mock_result = MagicMock()
+        mock_result.result = "ok"
+
+        async def fake_query(**kwargs):
+            yield mock_result
+
+        with patch("evopaw.agents.main_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.main_agent.build_bootstrap_prompt", return_value=""), \
+             patch("evopaw.agents.main_agent.build_main_agent_options") as mock_opts, \
+             patch("evopaw.agents.main_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            await fn("hi", [], "sid_001", root_id="")
+
+        sender.record_skills.assert_not_called()

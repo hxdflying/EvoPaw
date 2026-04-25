@@ -82,3 +82,46 @@ class TestCaptureSender:
         sender = CaptureSender()
         with pytest.raises(KeyError):
             await sender.wait_for_reply("never_registered", timeout=0.01)
+
+
+class TestRecordSkills:
+    """record_skills / pop_skills: TestAPI 用于读取本轮触发的 Skill 列表"""
+
+    async def test_record_then_pop(self):
+        """record_skills 后 pop_skills 取出列表"""
+        sender = CaptureSender()
+        sender.record_skills("msg_001", ["tavily_search", "memory-save"])
+        assert sender.pop_skills("msg_001") == ["tavily_search", "memory-save"]
+
+    async def test_pop_clears_entry(self):
+        """pop 后再次 pop 同一 msg_id 返回空列表"""
+        sender = CaptureSender()
+        sender.record_skills("msg_001", ["foo"])
+        sender.pop_skills("msg_001")
+        assert sender.pop_skills("msg_001") == []
+
+    async def test_pop_unknown_msg_id_returns_empty(self):
+        """未记录的 msg_id pop 返回空列表，不抛异常"""
+        sender = CaptureSender()
+        assert sender.pop_skills("never_recorded") == []
+
+    async def test_record_empty_root_id_is_noop(self):
+        """root_id 为空串时不记录"""
+        sender = CaptureSender()
+        sender.record_skills("", ["foo"])
+        assert sender.pop_skills("") == []
+
+    async def test_record_copies_list(self):
+        """record_skills 内部应做拷贝，外部修改原列表不影响存储"""
+        sender = CaptureSender()
+        skills = ["a", "b"]
+        sender.record_skills("msg_001", skills)
+        skills.append("c")
+        assert sender.pop_skills("msg_001") == ["a", "b"]
+
+    async def test_record_overwrite(self):
+        """同一 root_id 二次 record 覆盖前值"""
+        sender = CaptureSender()
+        sender.record_skills("msg_001", ["a"])
+        sender.record_skills("msg_001", ["b", "c"])
+        assert sender.pop_skills("msg_001") == ["b", "c"]

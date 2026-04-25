@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 
 from lark_oapi.client import Client
@@ -32,32 +33,57 @@ class FeishuSender(SenderProtocol):
 
     async def send(self, routing_key: str, content: str, root_id: str) -> None:
         """发送 interactive 卡片消息（lark_md Markdown 格式）."""
-        msg_type = "interactive"
-        msg_content = self._build_card(content)
+        await self._send_with_retry(
+            routing_key=routing_key,
+            msg_type="interactive",
+            content=self._build_card(content),
+            root_id=root_id,
+            label="send",
+        )
 
+    async def _send_with_retry(
+        self,
+        *,
+        routing_key: str,
+        msg_type: str,
+        content: str,
+        root_id: str,
+        label: str,
+    ) -> None:
+        """通用重试主体：按 routing_key 分流到 p2p / group / thread，失败按 retry_backoff 重试.
+
+        - 未知 routing_key 仅警告，不重试
+        - 重试用尽 → 仅 error 日志，不再向上抛（避免崩溃 Runner）
+        - label 用于日志区分调用方（"send" / "send_text"）
+        """
         for attempt in range(self.max_retries):
             try:
                 if routing_key.startswith("p2p:"):
                     receive_id = routing_key.split(":", 1)[1]
-                    await self._send_p2p(receive_id, msg_type, msg_content, root_id)
+                    await self._send_p2p(receive_id, msg_type, content, root_id)
                 elif routing_key.startswith("group:"):
                     chat_id = routing_key.split(":", 1)[1]
-                    await self._send_group(chat_id, msg_type, msg_content, root_id)
+                    await self._send_group(chat_id, msg_type, content, root_id)
                 elif routing_key.startswith("thread:"):
-                    await self._send_thread(root_id, msg_type, msg_content, root_id)
+                    await self._send_thread(root_id, msg_type, content, root_id)
                 else:
-                    logger.warning("Unknown routing_key: %s", routing_key)
+                    logger.warning("%s: unknown routing_key %s", label, routing_key)
                 return
             except Exception as exc:  # pragma: no cover - 网络错误在集成环境验证
                 logger.warning(
-                    "Failed to send message to %s (attempt %d/%d): %s",
+                    "Failed to %s message to %s (attempt %d/%d): %s",
+                    label,
                     routing_key,
                     attempt + 1,
                     self.max_retries,
                     exc,
                 )
                 if attempt + 1 >= self.max_retries:
-                    logger.error("send: all retries exhausted for %s, message not delivered", routing_key)
+                    logger.error(
+                        "%s: all retries exhausted for %s, message not delivered",
+                        label,
+                        routing_key,
+                    )
                     break
                 delay = self.retry_backoff[min(
                     attempt, len(self.retry_backoff) - 1
@@ -132,41 +158,44 @@ class FeishuSender(SenderProtocol):
                 f"Feishu patch message failed: {resp.code}, {resp.msg}"
             )
 
+    async def send_welcome_card(self, chat_id: str, group_name: str) -> None:
+        """Bot 入群欢迎卡片。失败时静默记录，不向上抛异常。"""
+        if group_name:
+            text = (
+                f"🐾 你好「{group_name}」！我是 **EvoPaw（小爪子）**，飞书工作助手。\n\n"
+                "直接 @我 提问即可调用各类技能；输入 `/help` 查看可用命令。"
+            )
+        else:
+            text = (
+                "🐾 你好！我是 **EvoPaw（小爪子）**，飞书工作助手。\n\n"
+                "直接 @我 提问即可调用各类技能；输入 `/help` 查看可用命令。"
+            )
+        msg_content = self._build_card(text)
+        try:
+            resp = await self._create_group_raw(
+                chat_id, "interactive", msg_content, uuid.uuid4().hex
+            )
+            if not resp.success():
+                logger.warning(
+                    "send_welcome_card API failed for chat %s: %s %s",
+                    chat_id,
+                    resp.code,
+                    resp.msg,
+                )
+        except Exception as exc:  # pragma: no cover - 网络错误在集成环境验证
+            logger.warning("send_welcome_card failed for chat %s: %s", chat_id, exc)
+
     async def send_text(
         self, routing_key: str, content: str, root_id: str
     ) -> None:
         """发送纯文本消息（供 slash 命令使用）."""
-        msg_type = "text"
-        msg_content = json.dumps({"text": content}, ensure_ascii=False)
-
-        for attempt in range(self.max_retries):
-            try:
-                if routing_key.startswith("p2p:"):
-                    receive_id = routing_key.split(":", 1)[1]
-                    await self._send_p2p(receive_id, msg_type, msg_content, root_id)
-                elif routing_key.startswith("group:"):
-                    chat_id = routing_key.split(":", 1)[1]
-                    await self._send_group(chat_id, msg_type, msg_content, root_id)
-                elif routing_key.startswith("thread:"):
-                    await self._send_thread(root_id, msg_type, msg_content, root_id)
-                else:
-                    logger.warning("send_text: unknown routing_key %s", routing_key)
-                return
-            except Exception as exc:  # pragma: no cover - 网络错误在集成环境验证
-                logger.warning(
-                    "Failed to send_text to %s (attempt %d/%d): %s",
-                    routing_key,
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
-                )
-                if attempt + 1 >= self.max_retries:
-                    logger.error("send_text: all retries exhausted for %s, message not delivered", routing_key)
-                    break
-                delay = self.retry_backoff[min(
-                    attempt, len(self.retry_backoff) - 1
-                )]
-                await asyncio.sleep(delay)
+        await self._send_with_retry(
+            routing_key=routing_key,
+            msg_type="text",
+            content=json.dumps({"text": content}, ensure_ascii=False),
+            root_id=root_id,
+            label="send_text",
+        )
 
     async def _send_p2p(
         self, open_id: str, msg_type: str, content: str, uuid: str

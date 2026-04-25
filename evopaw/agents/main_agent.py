@@ -12,10 +12,12 @@ import time
 from pathlib import Path
 
 from claude_agent_sdk import (
+    AssistantMessage,
     CLIConnectionError,
     CLINotFoundError,
     ClaudeAgentOptions,
     ResultMessage,
+    ToolUseBlock,
     query,
 )
 
@@ -113,6 +115,7 @@ def build_agent_fn(
         logger.info(
             "agent_fn called: session=%s, msg=%s",
             session_id, user_message[:50],
+            extra={"routing_key": routing_key, "session_id": session_id},
         )
 
         # 1. 构建 system prompt
@@ -188,18 +191,42 @@ def build_agent_fn(
         # 7. 调用 Claude Agent SDK
         try:
             final_text = ""
+            skills_called: list[str] = []
             async for message in query(prompt=full_message, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if (
+                            isinstance(block, ToolUseBlock)
+                            and block.name.endswith("skill_loader")
+                        ):
+                            skill_name = block.input.get("skill_name", "")
+                            if skill_name:
+                                skills_called.append(skill_name)
                 if isinstance(message, ResultMessage):
                     final_text = message.result
         except (CLINotFoundError, CLIConnectionError) as exc:
-            logger.error("Claude SDK error: %s", exc)
+            logger.error(
+                "Claude SDK error: %s", exc,
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
             return f"⚠️ Claude 调用失败：{exc}"
         except Exception:  # noqa: BLE001
-            logger.exception("Unexpected error in agent_fn")
+            logger.exception(
+                "Unexpected error in agent_fn",
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
             return "⚠️ Agent 发生内部错误，请稍后重试。"
 
         if not final_text:
             return "⚠️ Claude 未返回有效回复，请重试。"
+
+        # 7b. 上报本轮 skills_called 到 sender（仅 CaptureSender 实现，TestAPI 用）
+        record_skills = getattr(sender, "record_skills", None)
+        if record_skills is not None and root_id:
+            try:
+                record_skills(root_id, skills_called)
+            except Exception:  # noqa: BLE001
+                logger.warning("record_skills failed for root_id=%s", root_id, exc_info=True)
 
         # 8. 持久化：ctx.json 快照 + raw.jsonl 审计日志
         turn_messages = [
