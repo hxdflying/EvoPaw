@@ -9,6 +9,7 @@
 - **19 个内置 Skills**：文件处理、网页搜索/浏览、飞书操作、定时任务、记忆管理、投资分析等
 - **三层记忆架构**：Bootstrap 文件注入 + ctx.json 上下文压缩 + pgvector 语义搜索
 - **图片多模态**：Claude 原生 image block，直接理解用户发送的图片
+- **语音消息**：飞书 audio 消息端到端转写（阿里云 Fun-ASR 实时 WebSocket，one-shot 模式），转写文本与原始音频同时交给 Agent；长语音先回执后正式回复
 - **Verbose 详细模式**：实时推送工具调用过程到飞书
 - **定时任务**：支持一次性（at）、固定间隔（every）、Cron 表达式三种模式
 - **TestAPI**：HTTP 接口本地调试，无需真实飞书环境
@@ -114,10 +115,12 @@ export FEISHU_APP_ID=<飞书应用 App ID>              # 飞书开放平台
 export FEISHU_APP_SECRET=<飞书应用 App Secret>      # 飞书开放平台
 
 # 可选
-export QWEN_API_KEY=<通义千问 API Key>             # 记忆摘要压缩 + 向量化
+export DASHSCOPE_API_KEY=<阿里云百炼 API Key>      # 飞书语音转写（Fun-ASR）+ 通义记忆向量化
 export TAVILY_API_KEY=<Tavily API Key>             # 互联网搜索
 export MEMORY_DB_DSN=postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory
 ```
+
+> 历史变量名 `QWEN_API_KEY` 与 `DASHSCOPE_API_KEY` 同源（都指向阿里云百炼），`evopaw/asr/*` 与记忆向量化均使用后者。
 
 ### 配置
 
@@ -144,10 +147,20 @@ agent:
 memory:
   workspace_dir: "./data/workspace"
   ctx_dir: "./data/ctx"
-  db_dsn: "${MEMORY_DB_DSN}"             # 可选，留空则跳过向量索引
+  # NOTE: Python 不展开 ${VAR} 这种 bash 语法，必须填字面值。
+  #   - 本地直跑：host 用 localhost
+  #   - docker compose：host 改为 evopaw-pgvector（compose 服务名）
+  db_dsn: "postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory"
+
+asr:                                       # 语音消息（飞书 audio → Fun-ASR）
+  enabled: true
+  model: "fun-asr-realtime"                # 上线前固定为官方快照号（启动会有别名 WARN 提醒）
+  short_wait_s: 10                         # 转写超此时长触发"语音已收到"回执
+  long_audio_threshold_ms: 15000           # duration 大于此值立即发回执
+  display_transcript: true                 # 回复中是否展示转写文本
 
 debug:
-  enable_test_api: true                  # 本地调试时开启
+  enable_test_api: true                    # 本地调试时开启
   test_api_port: 9090
 ```
 
@@ -244,6 +257,43 @@ curl -X DELETE http://127.0.0.1:9090/api/test/sessions
 | L2 Context | `ctx.json` + `raw.jsonl` | 压缩后的对话快照 + 完整审计日志 | 自动恢复到当前 session |
 | L3 Vector | pgvector DB | 历史对话的语义向量 + 全文索引 | `search_memory` Skill 混合搜索 |
 
+### 语音消息
+
+飞书用户发送 audio 消息时，EvoPaw 自动完成「下载 → 转写 → Agent 推理 → 回复」全链路：
+
+```
+飞书 audio  →  FeishuDownloader  →  SpeechRecognitionService
+                                          │
+                                          ▼
+                            FunASRRealtimeClient (WebSocket)
+                                          │
+                  run-task → 推音频帧 → finish-task → result-generated × N
+                                          │
+                                          ▼
+            (语音转写 + 沙盒音频路径) → Main Agent → "语音转写：…\n\n回答：…"
+```
+
+**关键特性**：
+
+- **本地字节流直送**：无需公网 OSS，下载后字节流直接送入 Fun-ASR WebSocket
+- **凭证收敛**：仅一把 `DASHSCOPE_API_KEY`，仅在主进程，不写入 workspace、不暴露给 Skill / Sub-Agent
+- **失败分类文案**：`download` / `ws_connect` / `submit` / `disconnect` / `timeout` / `task_failed` / `empty` 七种 reason 各有用户可见的中文降级文案
+- **混合交互**：短语音同卡片完成；`duration > 15s` 或转写超 `short_wait_s` 时先回执 "语音已收到，正在转写和分析"，后正式回复
+- **重投递去重**：Runner LRU 滚动 256 个最近 `msg_id`，飞书重投递不会触发二次 WebSocket
+- **Prometheus 指标**：`evopaw_asr_requests_total` / `evopaw_asr_latency_seconds` / `evopaw_asr_ws_reconnect_total` / `evopaw_audio_messages_total` / `evopaw_audio_dedup_hits_total` 等
+
+**预生产工具**：
+
+```bash
+# 审计真实飞书录音的采样率（决定是否需要 ffmpeg 转码到 16kHz）
+python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/
+
+# 用本地 Prometheus 数据校准 short_wait_s / max_wait_s
+python3 scripts/calibrate_thresholds.py
+```
+
+详细设计与上线 runbook：`docs/superpowers/specs/2026-04-21-feishu-funasr-voice-design.md` 与 `docs/runbooks/voice-pre-production.md`。
+
 ### 运行测试
 
 ```bash
@@ -257,7 +307,12 @@ python3 -m pytest tests/unit/test_main_agent.py -v
 python3 -m pytest tests/integration/ -m "not llm" -v
 ```
 
-**测试统计**（2026-04-17）：496 单元测试，0 失败
+**测试统计**（2026-04-25）：599 单元测试 + 6 语音端到端集成测试 + 飞书 mock 集成，0 失败
+
+```bash
+# 语音端到端（不依赖外网与 Anthropic API Key，本地 aiohttp WS mock 即可）
+python3 -m pytest tests/integration/test_voice_end_to_end.py -v
+```
 
 ### 技术栈
 
@@ -268,6 +323,7 @@ python3 -m pytest tests/integration/ -m "not llm" -v
 | Sub-Agent 模型 | Claude Haiku 4.5 |
 | 飞书 SDK | `lark-oapi`（WebSocket + REST） |
 | 记忆摘要/向量化 | 通义千问（OpenAI 兼容格式，DashScope） |
+| 语音转写 | 阿里云百炼 Fun-ASR 实时 WebSocket（one-shot，仅 `DASHSCOPE_API_KEY` 一把凭证） |
 | 向量数据库 | PostgreSQL 16 + pgvector |
 | HTTP 框架 | aiohttp |
 | 监控 | Prometheus + `/metrics` 端点 |
