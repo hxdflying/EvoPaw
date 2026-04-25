@@ -23,6 +23,8 @@ import yaml
 from lark_oapi.client import Client, LogLevel
 
 from evopaw.agents.main_agent import build_agent_fn
+from evopaw.asr.funasr_realtime_client import FunASRRealtimeClient
+from evopaw.asr.service import SpeechRecognitionService
 from evopaw.cleanup.service import CleanupService
 from evopaw.cron.service import CronService
 from evopaw.feishu.downloader import FeishuDownloader
@@ -35,6 +37,55 @@ from evopaw.runner import Runner
 from evopaw.session.manager import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+# Fun-ASR 不带快照号的稳定别名集合（设计文档 §9.1：上线前应固定为快照号）
+_ASR_MODEL_ALIASES = frozenset({"fun-asr-realtime", "fun-asr-flash-8k-realtime"})
+
+
+def _warn_if_model_is_alias(model: str) -> None:
+    """模型名为稳定别名时发警告，提醒生产固定为快照号（§9.1 / Phase 4 第 3 项）.
+
+    本函数只打日志，不阻断启动；测试环境/开发联调允许继续使用别名。
+    """
+    if model in _ASR_MODEL_ALIASES:
+        logger.warning(
+            "ASR model='%s' 是稳定别名，生产建议固定为快照号（如 "
+            "fun-asr-realtime-2025-11-07），见设计文档 §9.1。",
+            model,
+        )
+
+
+def _build_speech_service(asr_cfg: dict) -> SpeechRecognitionService | None:
+    """按 config + 环境变量构建 SpeechRecognitionService；未启用或缺凭证时返回 None."""
+    if not asr_cfg.get("enabled", False):
+        logger.info("ASR disabled by config; voice messages will be ignored.")
+        return None
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        logger.warning(
+            "ASR enabled but DASHSCOPE_API_KEY is empty; disabling speech service."
+        )
+        return None
+    model = asr_cfg.get("model", "fun-asr-realtime")
+    _warn_if_model_is_alias(model)
+    client = FunASRRealtimeClient(
+        api_key=api_key,
+        ws_url=asr_cfg.get(
+            "ws_url", "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"
+        ),
+        model=model,
+        audio_format=asr_cfg.get("audio_format", "opus"),
+        sample_rate=int(asr_cfg.get("sample_rate", 16000)),
+        chunk_bytes=int(asr_cfg.get("chunk_bytes", 1024)),
+        chunk_interval_ms=int(asr_cfg.get("chunk_interval_ms", 100)),
+        submit_timeout_s=float(asr_cfg.get("submit_timeout_s", 10.0)),
+        max_wait_s=float(asr_cfg.get("max_wait_s", 120.0)),
+        max_reconnect_retries=int(asr_cfg.get("max_reconnect_retries", 1)),
+        provider=asr_cfg.get("provider", "aliyun_funasr_realtime"),
+    )
+    logger.info("ASR enabled: model=%s", client._model)  # noqa: SLF001
+    return SpeechRecognitionService(client)
 
 
 def _load_config(config_path: Path) -> dict:
@@ -118,6 +169,9 @@ async def async_main() -> None:
 
     runner_cfg = cfg.get("runner", {})
     idle_timeout = runner_cfg.get("queue_idle_timeout_s", 300.0)
+    dedup_window_size = int(runner_cfg.get("dedup_window_size", 256))
+
+    asr_cfg = cfg.get("asr", {}) or {}
 
     # ── 4. 构建 Feishu HTTP Client ─────────────────────────────────────────
     client = (
@@ -161,6 +215,9 @@ async def async_main() -> None:
         sub_agent_max_turns=sub_agent_max_turns,
     )
 
+    # ── 6b. 构建 ASR 服务（可选）─────────────────────────────────────────────
+    speech_service = _build_speech_service(asr_cfg)
+
     # ── 7. 构建 Runner ──────────────────────────────────────────────────────
     # 生产 Runner 与 TestAPI Runner 仅 sender 不同，其余装配完全一致
     _make_runner = partial(
@@ -169,6 +226,15 @@ async def async_main() -> None:
         agent_fn=agent_fn,
         downloader=downloader,
         idle_timeout=idle_timeout,
+        speech_service=speech_service,
+        dedup_window_size=dedup_window_size,
+        long_audio_threshold_ms=int(asr_cfg.get("long_audio_threshold_ms", 15000)),
+        short_wait_s=float(asr_cfg.get("short_wait_s", 10.0)),
+        ack_text=asr_cfg.get("ack_text", "语音已收到，正在转写和分析，请稍候。"),
+        transcription_title=asr_cfg.get("transcription_title", "语音转写"),
+        answer_title=asr_cfg.get("answer_title", "回答"),
+        display_transcript=bool(asr_cfg.get("display_transcript", True)),
+        include_audio_path=bool(asr_cfg.get("include_audio_path", True)),
     )
     runner = _make_runner(sender=sender)
 

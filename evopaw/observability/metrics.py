@@ -68,6 +68,52 @@ errors_total = Counter(
 )
 
 
+# ── ASR / Voice 指标（设计文档 §15）────────────────────────────────
+
+asr_requests_total = Counter(
+    "evopaw_asr_requests_total",
+    "Total ASR (one-shot transcribe) requests by terminal status",
+    # status ∈ {success, ws_connect, submit, disconnect, timeout, task_failed, empty, download}
+    ["provider", "status"],
+    registry=REGISTRY,
+)
+
+asr_latency_seconds = Histogram(
+    "evopaw_asr_latency_seconds",
+    "End-to-end duration of a one-shot ASR transcribe (service layer)",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+asr_timeouts_total = Counter(
+    "evopaw_asr_timeouts_total",
+    "ASR requests that hit max_wait_s overall timeout",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+asr_ws_reconnect_total = Counter(
+    "evopaw_asr_ws_reconnect_total",
+    "Whole-transcribe retries triggered by max_reconnect_retries",
+    ["provider"],
+    registry=REGISTRY,
+)
+
+audio_messages_total = Counter(
+    "evopaw_audio_messages_total",
+    "Audio messages processed by Runner, by final status",
+    # status ∈ {success, asr_failed, no_service, download_failed}
+    ["status"],
+    registry=REGISTRY,
+)
+
+audio_dedup_hits_total = Counter(
+    "evopaw_audio_dedup_hits_total",
+    "Duplicate msg_id hits filtered out by Runner dedup",
+    registry=REGISTRY,
+)
+
+
 def routing_key_type(routing_key: str) -> str:
     if routing_key.startswith("p2p:"):
         return "p2p"
@@ -97,6 +143,28 @@ def record_error(component: str, error_type: str) -> None:
         component=component,
         error_type=error_type or "unknown",
     ).inc()
+
+
+def record_asr_request(provider: str, status: str) -> None:
+    asr_requests_total.labels(provider=provider or "unknown", status=status).inc()
+    if status == "timeout":
+        asr_timeouts_total.labels(provider=provider or "unknown").inc()
+
+
+def record_asr_latency(provider: str, seconds: float) -> None:
+    asr_latency_seconds.labels(provider=provider or "unknown").observe(max(0.0, seconds))
+
+
+def record_asr_ws_reconnect(provider: str) -> None:
+    asr_ws_reconnect_total.labels(provider=provider or "unknown").inc()
+
+
+def record_audio_message(status: str) -> None:
+    audio_messages_total.labels(status=status or "unknown").inc()
+
+
+def record_audio_dedup_hit() -> None:
+    audio_dedup_hits_total.inc()
 
 
 def export_metrics() -> tuple[bytes, str]:

@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from evopaw.asr.models import AsrFailure, AsrResult
 from evopaw.models import Attachment, InboundMessage
+from evopaw.observability.metrics import (
+    audio_dedup_hits_total,
+    audio_messages_total,
+)
 from evopaw.runner import Runner
 from evopaw.session.manager import SessionManager
 from evopaw.session.models import MessageEntry
@@ -632,5 +637,854 @@ class TestAttachmentDownload:
             assert len(dl.calls) == 1
             _, _, session_id = dl.calls[0]
             assert session_id.startswith("s-")
+        finally:
+            await runner.shutdown()
+
+
+# ── Voice (ASR) ─────────────────────────────────────────────────
+
+
+class MockSpeechService:
+    """可观测的 SpeechRecognitionService mock."""
+
+    def __init__(
+        self,
+        result: AsrResult | None = None,
+        failure: AsrFailure | None = None,
+    ) -> None:
+        self._result = result or AsrResult(
+            transcript="你好世界",
+            provider="aliyun_funasr_realtime",
+            model="fun-asr-realtime",
+            task_id="tid",
+        )
+        self._failure = failure
+        self.calls: list[tuple[Path, int | None]] = []
+
+    async def transcribe_file(
+        self,
+        audio_path: Path,
+        *,
+        duration_ms: int | None = None,
+    ) -> AsrResult:
+        self.calls.append((audio_path, duration_ms))
+        if self._failure is not None:
+            raise self._failure
+        return self._result
+
+
+def make_audio_inbound(
+    msg_id: str = "om_audio_001",
+    file_key: str = "audio_fk_001",
+    duration_ms: int | None = 3000,
+) -> InboundMessage:
+    att = Attachment(
+        msg_type="audio",
+        file_key=file_key,
+        file_name=f"{file_key}.audio",
+        duration_ms=duration_ms,
+    )
+    return InboundMessage(
+        routing_key="p2p:ou_test",
+        content="",
+        msg_id=msg_id,
+        root_id=msg_id,
+        sender_id="ou_test",
+        ts=1000000,
+        attachment=att,
+    )
+
+
+class TestVoiceTranscription:
+    async def test_audio_success_agent_gets_voice_template(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """语音转写成功 → Agent 收到含 transcript + sandbox 路径的模板."""
+        audio_path = tmp_path / "audio_fk_001.audio"
+        audio_path.write_bytes(b"opus")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="帮我查一下天气",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t1",
+            )
+        )
+        received: list[str] = []
+
+        async def capture_agent(user_msg, history, sid, rk="", rid="", verbose=False):
+            received.append(user_msg)
+            return "今天北京晴。"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=capture_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+        )
+
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            # Agent 侧：transcript 和沙盒路径都出现在 user_content
+            assert len(received) == 1
+            uc = received[0]
+            assert "帮我查一下天气" in uc
+            assert "/workspace/sessions/" in uc
+            assert "audio_fk_001.audio" in uc
+            # 服务被调用，透传 duration_ms
+            assert svc.calls == [(audio_path, 3000)]
+            # 最终回复：语音转写 + 回答 两段
+            assert reply.startswith("语音转写：")
+            assert "帮我查一下天气" in reply
+            assert "回答：" in reply
+            assert "今天北京晴。" in reply
+        finally:
+            await runner.shutdown()
+
+    async def test_audio_success_final_reply_written_to_history(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """语音成功后 session 历史里写入的是格式化后的 '语音转写 + 回答'."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="早",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        async def agent(user_msg, history, sid, rk="", rid="", verbose=False):
+            return "早上好。"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+        )
+
+        try:
+            await runner.dispatch(make_audio_inbound())
+            await mock_sender.wait_for_message()
+
+            session = await session_mgr.get_or_create("p2p:ou_test")
+            history = await session_mgr.load_history(session.id)
+            assistant_entry = next(h for h in history if h.role == "assistant")
+            assert assistant_entry.content.startswith("语音转写：")
+            assert "早上好。" in assistant_entry.content
+        finally:
+            await runner.shutdown()
+
+    async def test_asr_failure_replies_friendly_text_and_skips_agent(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """ASR 失败直接回友好文案，不进 Agent，不写历史."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            failure=AsrFailure(reason="task_failed", detail="E001")
+        )
+
+        agent_called: list[bool] = []
+
+        async def agent(user_msg, history, sid, rk="", rid="", verbose=False):
+            agent_called.append(True)
+            return "ignored"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+        )
+
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            assert "语音转写失败" in reply
+            assert agent_called == []
+
+            session = await session_mgr.get_or_create("p2p:ou_test")
+            history = await session_mgr.load_history(session.id)
+            assert history == []
+        finally:
+            await runner.shutdown()
+
+    async def test_agent_error_after_asr_success_preserves_transcript(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """Agent 异常时 transcript 仍出现在回复里（设计文档 §12.6）."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="我的转写内容",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        async def failing_agent(user_msg, history, sid, rk="", rid="", verbose=False):
+            raise RuntimeError("boom")
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=failing_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+        )
+
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            # transcript 仍然出现
+            assert "我的转写内容" in reply
+            assert reply.startswith("语音转写：")
+            # 回答部分降级为错误文案
+            assert "处理出错" in reply
+        finally:
+            await runner.shutdown()
+
+    async def test_audio_without_speech_service_falls_back_to_generic(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """speech_service 未注入时，audio 退回通用附件模板（不应崩溃）."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=None,
+        )
+
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            # 退回通用附件模板（echo_agent 把模板回显）
+            assert "/workspace/sessions/" in reply
+            assert "音频" not in reply or True  # 只是确保不崩溃
+            assert "语音转写：" not in reply  # 没有 ASR 时不会走语音格式化
+        finally:
+            await runner.shutdown()
+
+
+# ── Dedup ───────────────────────────────────────────────────────
+
+
+class TestDedup:
+    async def test_duplicate_msg_id_is_skipped(self, session_mgr, mock_sender):
+        """同 msg_id 重复送达时，第二条应被丢弃，不再调用 agent."""
+        call_count = 0
+
+        async def counting_agent(user_msg, history, sid, rk="", rid="", verbose=False):
+            nonlocal call_count
+            call_count += 1
+            return f"reply {call_count}"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=counting_agent,
+            idle_timeout=2.0,
+        )
+
+        try:
+            await runner.dispatch(make_inbound(msg_id="om_dup"))
+            await mock_sender.wait_for_message()
+
+            await runner.dispatch(make_inbound(msg_id="om_dup"))
+            # 给 worker 一点时间处理（若处理了会有额外消息）
+            with pytest.raises(asyncio.TimeoutError):
+                await mock_sender.wait_for_message(timeout=0.3)
+
+            assert call_count == 1
+        finally:
+            await runner.shutdown()
+
+    async def test_distinct_msg_ids_both_processed(self, session_mgr, mock_sender):
+        """不同 msg_id 正常全部处理."""
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+        )
+
+        try:
+            await runner.dispatch(make_inbound(content="a", msg_id="om_1"))
+            await runner.dispatch(make_inbound(content="b", msg_id="om_2"))
+
+            replies = []
+            for _ in range(2):
+                _, r, _ = await mock_sender.wait_for_message()
+                replies.append(r)
+            assert replies == ["echo: a", "echo: b"]
+        finally:
+            await runner.shutdown()
+
+    async def test_dedup_window_size_zero_disables_dedup(
+        self, session_mgr, mock_sender
+    ):
+        """dedup_window_size=0 时完全关闭去重，同 msg_id 两次都处理."""
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            dedup_window_size=0,
+        )
+
+        try:
+            await runner.dispatch(make_inbound(msg_id="om_dup"))
+            await mock_sender.wait_for_message()
+
+            await runner.dispatch(make_inbound(msg_id="om_dup"))
+            _, reply, _ = await mock_sender.wait_for_message(timeout=1.0)
+            assert reply.startswith("echo:")
+        finally:
+            await runner.shutdown()
+
+    async def test_cron_bypasses_dedup(self, session_mgr, mock_sender):
+        """is_cron=True 的消息不参与去重（cron 重复触发合法）."""
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+        )
+
+        def cron_msg(msg_id: str) -> InboundMessage:
+            return InboundMessage(
+                routing_key="p2p:ou_test",
+                content="daily summary",
+                msg_id=msg_id,
+                root_id=msg_id,
+                sender_id="ou_test",
+                ts=1,
+                is_cron=True,
+            )
+
+        try:
+            await runner.dispatch(cron_msg("om_cron"))
+            await mock_sender.wait_for_message()
+
+            await runner.dispatch(cron_msg("om_cron"))
+            _, reply, _ = await mock_sender.wait_for_message(timeout=1.0)
+            assert reply == "echo: daily summary"
+        finally:
+            await runner.shutdown()
+
+    async def test_dedup_window_lru_eviction(self, session_mgr, mock_sender):
+        """窗口满后最老的 msg_id 被淘汰，可再次被处理."""
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            dedup_window_size=2,
+        )
+
+        try:
+            await runner.dispatch(make_inbound(content="a", msg_id="om_1"))
+            await mock_sender.wait_for_message()
+            await runner.dispatch(make_inbound(content="b", msg_id="om_2"))
+            await mock_sender.wait_for_message()
+            # 窗口满，再进一条把 om_1 挤出去
+            await runner.dispatch(make_inbound(content="c", msg_id="om_3"))
+            await mock_sender.wait_for_message()
+
+            # om_1 已被淘汰，可以再次被处理
+            await runner.dispatch(make_inbound(content="a2", msg_id="om_1"))
+            _, reply, _ = await mock_sender.wait_for_message(timeout=1.0)
+            assert reply == "echo: a2"
+        finally:
+            await runner.shutdown()
+
+
+# ── Phase 3: 分类文案 & 回执 & 指标 ─────────────────────────────
+
+
+def _counter_value(counter, **labels) -> float:
+    if labels:
+        return counter.labels(**labels)._value.get()
+    return counter._value.get()
+
+
+class SlowSpeechService:
+    """延迟 `delay_s` 秒后返回结果的 mock，用于测 short_wait_s 触发的回执."""
+
+    def __init__(
+        self,
+        delay_s: float,
+        result: AsrResult | None = None,
+    ) -> None:
+        self._delay = delay_s
+        self._result = result or AsrResult(
+            transcript="慢转写",
+            provider="aliyun_funasr_realtime",
+            model="fun-asr-realtime",
+            task_id="t",
+        )
+        self.calls: list[tuple] = []
+
+    async def transcribe_file(self, audio_path, *, duration_ms=None):
+        self.calls.append((audio_path, duration_ms))
+        await asyncio.sleep(self._delay)
+        return self._result
+
+
+class TestVoiceFailureClassified:
+    """按 AsrFailure.reason 映射文案（设计文档 §12.1-§12.5）."""
+
+    @pytest.mark.parametrize(
+        ("reason", "expect_phrase"),
+        [
+            ("download", "下载失败"),
+            ("ws_connect", "转写服务连接失败"),
+            ("submit", "转写服务连接失败"),
+            ("disconnect", "转写中断"),
+            ("timeout", "转写超时"),
+            ("task_failed", "转写失败"),
+            ("empty", "转写失败"),
+        ],
+    )
+    async def test_reason_maps_to_user_text(
+        self, session_mgr, mock_sender, tmp_path, reason, expect_phrase
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(failure=AsrFailure(reason=reason, detail="d"))
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+        )
+        try:
+            await runner.dispatch(make_audio_inbound(msg_id=f"om_{reason}"))
+            _, reply, _ = await mock_sender.wait_for_message()
+            assert expect_phrase in reply, (
+                f"reason={reason} reply={reply!r} 不含期望短语 {expect_phrase!r}"
+            )
+        finally:
+            await runner.shutdown()
+
+
+class TestVoiceAck:
+    """回执机制（设计文档 §7.2）."""
+
+    async def test_long_duration_triggers_ack_before_result(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """duration_ms 超阈值时立即发 ack，正式回复晚到."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="长语音",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=lambda *a, **kw: _async_return("答复"),
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=10_000,
+            short_wait_s=10.0,  # 确保不会被 short_wait 触发
+        )
+        try:
+            # duration=30000 > threshold=10000 → 必发 ack
+            await runner.dispatch(
+                make_audio_inbound(msg_id="om_long", duration_ms=30_000)
+            )
+            ack = await mock_sender.wait_for_message(timeout=1.0)
+            assert "稍候" in ack[1] or "正在转写" in ack[1], (
+                f"第一条应为回执，实际为 {ack[1]!r}"
+            )
+
+            final = await mock_sender.wait_for_message(timeout=1.0)
+            assert "长语音" in final[1]
+            assert "答复" in final[1]
+        finally:
+            await runner.shutdown()
+
+    async def test_short_wait_timeout_triggers_ack(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """duration_ms 小或缺失时，short_wait_s 超时触发 ack."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        # 转写耗时 0.3s 远超 short_wait_s=0.05s
+        svc = SlowSpeechService(
+            delay_s=0.3,
+            result=AsrResult(
+                transcript="慢",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            ),
+        )
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=lambda *a, **kw: _async_return("答"),
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,  # 确保不被 duration 触发
+            short_wait_s=0.05,
+        )
+        try:
+            await runner.dispatch(
+                make_audio_inbound(msg_id="om_slow", duration_ms=3000)
+            )
+            ack = await mock_sender.wait_for_message(timeout=1.0)
+            assert "稍候" in ack[1] or "正在转写" in ack[1]
+
+            final = await mock_sender.wait_for_message(timeout=1.0)
+            assert "慢" in final[1]
+        finally:
+            await runner.shutdown()
+
+    async def test_fast_short_audio_no_ack(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """短语音快速完成时不发 ack，只有一条最终回复."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="快",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=lambda *a, **kw: _async_return("答"),
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+        )
+        try:
+            await runner.dispatch(
+                make_audio_inbound(msg_id="om_fast", duration_ms=2000)
+            )
+            final = await mock_sender.wait_for_message(timeout=1.0)
+            assert "快" in final[1]
+            assert "答" in final[1]
+            # 不应还有第二条消息（ack）
+            with pytest.raises(asyncio.TimeoutError):
+                await mock_sender.wait_for_message(timeout=0.2)
+        finally:
+            await runner.shutdown()
+
+
+class TestAudioMetrics:
+    """Phase 3 Runner 侧 audio_* 指标."""
+
+    async def test_dedup_hit_increments_audio_dedup_metric(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService()
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+        )
+        try:
+            before = audio_dedup_hits_total._value.get()
+            await runner.dispatch(make_audio_inbound(msg_id="om_dup"))
+            await mock_sender.wait_for_message()
+
+            await runner.dispatch(make_audio_inbound(msg_id="om_dup"))
+            with pytest.raises(asyncio.TimeoutError):
+                await mock_sender.wait_for_message(timeout=0.3)
+
+            after = audio_dedup_hits_total._value.get()
+            assert after - before == 1.0
+        finally:
+            await runner.shutdown()
+
+    async def test_audio_success_increments_success_counter(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService()
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+        )
+        try:
+            before = _counter_value(audio_messages_total, status="success")
+            await runner.dispatch(make_audio_inbound(msg_id="om_metric_ok"))
+            await mock_sender.wait_for_message()
+            after = _counter_value(audio_messages_total, status="success")
+            assert after - before == 1.0
+        finally:
+            await runner.shutdown()
+
+    async def test_audio_asr_failure_increments_asr_failed(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(failure=AsrFailure(reason="timeout"))
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=echo_agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+        )
+        try:
+            before = _counter_value(audio_messages_total, status="asr_failed")
+            await runner.dispatch(make_audio_inbound(msg_id="om_metric_fail"))
+            await mock_sender.wait_for_message()
+            after = _counter_value(audio_messages_total, status="asr_failed")
+            assert after - before == 1.0
+        finally:
+            await runner.shutdown()
+
+
+async def _async_return(value):
+    """lambda + async 适配的小工具（直接返回协程）."""
+    return value
+
+
+# ── Phase 4: 显示配置可覆写 ──────────────────────────────────────
+
+
+class TestVoiceDisplayConfig:
+    """transcription_title / answer_title / display_transcript / include_audio_path."""
+
+    async def test_custom_titles_applied_to_reply(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="原文",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        async def agent(*a, **kw):
+            return "答复"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+            transcription_title="Transcript",
+            answer_title="Reply",
+        )
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            assert reply.startswith("Transcript：")
+            assert "Reply：" in reply
+            assert "语音转写：" not in reply
+            assert "回答：" not in reply
+        finally:
+            await runner.shutdown()
+
+    async def test_display_transcript_false_omits_transcript_segment(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="不该出现",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        async def agent(*a, **kw):
+            return "纯回答"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+            display_transcript=False,
+        )
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+
+            assert reply == "纯回答"
+            assert "不该出现" not in reply
+            assert "语音转写" not in reply
+        finally:
+            await runner.shutdown()
+
+    async def test_include_audio_path_false_hides_path_from_agent(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="一句转写",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        captured: list[str] = []
+
+        async def agent(user_msg, *a, **kw):
+            captured.append(user_msg)
+            return "OK"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+            include_audio_path=False,
+        )
+        try:
+            await runner.dispatch(make_audio_inbound())
+            await mock_sender.wait_for_message()
+
+            assert len(captured) == 1
+            user_content = captured[0]
+            assert "一句转写" in user_content
+            # 沙盒路径与原音频文件提示都不应出现
+            assert "/workspace/sessions/" not in user_content
+            assert "原始音频文件" not in user_content
+        finally:
+            await runner.shutdown()
+
+    async def test_defaults_preserve_phase2_behavior(
+        self, session_mgr, mock_sender, tmp_path
+    ):
+        """不传任何显示参数时，行为与 Phase 2 完全一致."""
+        audio_path = tmp_path / "a.audio"
+        audio_path.write_bytes(b"x")
+        dl = MockDownloader(download_result=audio_path)
+        svc = MockSpeechService(
+            result=AsrResult(
+                transcript="hi",
+                provider="aliyun_funasr_realtime",
+                model="fun-asr-realtime",
+                task_id="t",
+            )
+        )
+
+        async def agent(*a, **kw):
+            return "ans"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=agent,
+            idle_timeout=2.0,
+            downloader=dl,
+            speech_service=svc,
+            long_audio_threshold_ms=60_000,
+            short_wait_s=10.0,
+        )
+        try:
+            await runner.dispatch(make_audio_inbound())
+            _, reply, _ = await mock_sender.wait_for_message()
+            assert reply.startswith("语音转写：")
+            assert "hi" in reply
+            assert "回答：\nans" in reply
         finally:
             await runner.shutdown()

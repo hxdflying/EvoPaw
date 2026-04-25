@@ -42,11 +42,14 @@ class FeishuDownloader:
         dest_path = dest_dir / attachment.file_name
 
         try:
+            # 飞书 "获取消息中的资源文件" 接口的 type 参数只接受 "image" 或 "file"，
+            # audio/video 等统一归属在 "file" 下；这里做一次显式映射，保持上层语义不变。
+            api_type = "file" if attachment.msg_type == "audio" else attachment.msg_type
             req = (
                 GetMessageResourceRequest.builder()
                 .message_id(msg_id)
                 .file_key(attachment.file_key)
-                .type(attachment.msg_type)
+                .type(api_type)
                 .build()
             )
             resp = await self._client.im.v1.message_resource.aget(req)

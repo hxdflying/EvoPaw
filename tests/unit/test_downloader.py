@@ -90,6 +90,37 @@ class TestFeishuDownloaderDownload:
         assert result.name == "audio_001.audio"
         assert result.read_bytes() == b"opus-bytes"
 
+    async def test_audio_request_uses_type_file(self, tmp_path):
+        """飞书资源接口的 type 参数只接受 image/file；audio 必须映射为 file."""
+        client = _make_client(data=b"opus-bytes")
+        dl = FeishuDownloader(client=client, data_dir=tmp_path)
+        att = _make_attachment(
+            msg_type="audio",
+            file_key="audio_001",
+            file_name="audio_001.audio",
+        )
+
+        await dl.download("msg_audio_001", att, "s-audio")
+
+        call = client.im.v1.message_resource.aget.await_args
+        req = call.args[0]
+        assert req.type == "file", (
+            f"audio 下载请求 type 应映射为 'file'，实际为 {req.type!r}"
+        )
+        assert req.file_key == "audio_001"
+        assert req.message_id == "msg_audio_001"
+
+    async def test_image_request_keeps_type_image(self, tmp_path):
+        """image/file 类型的 type 参数保持原值，不受 audio 映射影响."""
+        client = _make_client(data=b"img-bytes")
+        dl = FeishuDownloader(client=client, data_dir=tmp_path)
+        att = _make_attachment(msg_type="image", file_key="img_001", file_name="img_001.jpg")
+
+        await dl.download("msg_001", att, "s-abc")
+
+        req = client.im.v1.message_resource.aget.await_args.args[0]
+        assert req.type == "image"
+
     async def test_api_failure_returns_none(self, tmp_path):
         """API 返回失败（success() = False）时返回 None"""
         client = _make_fail_client(code=40300)

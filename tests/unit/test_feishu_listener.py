@@ -242,6 +242,23 @@ class TestFeishuListenerExtractAttachment:
         assert result is not None
         assert result.duration_ms is None
 
+    def test_audio_without_duration_sets_none(self):
+        """飞书 audio 消息 content 可能不带 duration 字段（§3.1 指出契约未稳定保证）."""
+        content = json.dumps({"file_key": "audio_003"})
+        result = FeishuListener._extract_attachment("audio", content)
+        assert result is not None
+        assert result.msg_type == "audio"
+        assert result.file_key == "audio_003"
+        assert result.file_name == "audio_003.audio"
+        assert result.duration_ms is None
+
+    def test_audio_with_null_duration_sets_none(self):
+        """duration 字段存在但为 null 时也应降级为 None，不抛异常."""
+        content = json.dumps({"file_key": "audio_004", "duration": None})
+        result = FeishuListener._extract_attachment("audio", content)
+        assert result is not None
+        assert result.duration_ms is None
+
 
 # ── FeishuListener init & start ────────────────────────────────────────────────
 
@@ -510,6 +527,33 @@ class TestExtractContentPostType:
         content = json.dumps({"en_us": {}})
         result = FeishuListener._extract_content("post", content)
         assert result == ""
+
+
+class TestAudioMessageDispatch:
+    """audio 消息通过事件处理器能正确 dispatch，InboundMessage.attachment 被填充."""
+
+    async def test_audio_message_dispatched_with_attachment(self):
+        loop = asyncio.get_event_loop()
+        received: list[InboundMessage] = []
+
+        async def on_msg(inbound: InboundMessage) -> None:
+            received.append(inbound)
+
+        handler = _EvoPawEventHandler(loop=loop, on_message=on_msg)
+
+        audio_content = json.dumps({"file_key": "audio_abc", "duration": 4200})
+        payload = _make_im_receive_payload(msg_type="audio", content=audio_content)
+        handler.do_without_validation(payload)
+        await asyncio.sleep(0.1)
+
+        assert len(received) == 1
+        msg = received[0]
+        assert msg.content == ""  # audio 消息没有文本
+        assert msg.attachment is not None
+        assert msg.attachment.msg_type == "audio"
+        assert msg.attachment.file_key == "audio_abc"
+        assert msg.attachment.file_name == "audio_abc.audio"
+        assert msg.attachment.duration_ms == 4200
 
 
 class TestPostMessageDispatch:

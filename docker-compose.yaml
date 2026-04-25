@@ -5,6 +5,8 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
+      # Fun-ASR / 百炼凭证（§9.2 Secrets Policy：仅在主进程环境，不写入 config.yaml）
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
