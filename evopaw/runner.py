@@ -226,17 +226,20 @@ class Runner:
                             routing_key_type=rk_type
                         ).dec()
                 return
+            log_ctx = {"routing_key": key, "feishu_msg_id": inbound.msg_id}
             try:
                 await self._handle(inbound)
             except Exception:
-                logger.exception("[%s] handle error", key)
+                logger.exception("[%s] handle error", key, extra=log_ctx)
                 record_error("runner", "handle_error")
                 try:
                     await self._sender.send(
                         key, "处理出错，请稍后重试。", inbound.root_id
                     )
                 except Exception:
-                    logger.exception("[%s] failed to send error message", key)
+                    logger.exception(
+                        "[%s] failed to send error message", key, extra=log_ctx
+                    )
                     record_error("runner", "send_error_message_failed")
             finally:
                 queue.task_done()
@@ -251,7 +254,10 @@ class Runner:
         # 0. 重投递去重（cron 调度不参与）
         if not inbound.is_cron and self._is_duplicate_msg(inbound.msg_id):
             logger.info(
-                "[%s] duplicate msg_id skipped: %s", key, inbound.msg_id
+                "[%s] duplicate msg_id skipped: %s",
+                key,
+                inbound.msg_id,
+                extra={"routing_key": key, "feishu_msg_id": inbound.msg_id},
             )
             if is_audio:
                 record_audio_dedup_hit()
@@ -298,6 +304,7 @@ class Runner:
                         inbound.msg_id,
                         failure.reason,
                         failure.detail,
+                        extra={"routing_key": key, "feishu_msg_id": inbound.msg_id},
                     )
                     record_error("runner", f"asr_{failure.reason}")
                     record_audio_message("asr_failed")
@@ -345,6 +352,11 @@ class Runner:
                 "[%s] agent failed after successful ASR msg_id=%s",
                 key,
                 inbound.msg_id,
+                extra={
+                    "routing_key": key,
+                    "session_id": session.id,
+                    "feishu_msg_id": inbound.msg_id,
+                },
             )
             record_error("runner", "agent_after_asr_failed")
             reply = _VOICE_AGENT_ERROR_REPLY

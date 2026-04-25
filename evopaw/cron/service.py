@@ -38,8 +38,10 @@ class CronService:
         self,
         data_dir: Path,
         dispatch_fn: DispatchFn,
-        tick_interval: float = 0.05,
+        tick_interval: float = 1.0,
     ) -> None:
+        # tick_interval 默认 1.0s（生产场景的合理值，避免每秒 20 次轮询的 CPU 开销）。
+        # 如需亚秒级精度（测试 / 高频调度），请显式覆盖（如 tick_interval=0.05）。
         self._data_dir = data_dir
         self._dispatch_fn = dispatch_fn
         self._tick_interval = tick_interval

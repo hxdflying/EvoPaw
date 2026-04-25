@@ -1,18 +1,10 @@
-"""对话记忆写入 pipeline（pgvector）
+"""对话记忆写入 pipeline（pgvector）。
 
-💡【第21课·搜索记忆】每轮对话结束后异步触发，不阻塞主流程：
-  asyncio.create_task(async_index_turn(...))
+每轮对话结束后通过 ``asyncio.create_task(async_index_turn(...))`` 异步触发，
+不阻塞主流程：``extract_summary_and_tags → embed_texts → upsert_memory``。
 
-pipeline：
-  1. extract_summary_and_tags — 调 LLM 提取一句话摘要 + 领域标签
-  2. embed_texts              — 调 text-embedding-v3 向量化
-  3. upsert_memory            — 写入 pgvector（ON CONFLICT DO NOTHING 幂等）
-
-与 m3l21 演示版的主要区别：
-  - db_dsn 作为参数传入（不读全局环境变量），方便测试和多实例部署
-  - db_dsn 为空时静默跳过，不报错
-  - DB 连接失败时只 log warning，不把异常传播给 Runner
-  - 新增 _connect_db() 作为可 mock 的注入点
+设计要点：``db_dsn`` 通过参数注入便于测试 / 多实例；为空时静默跳过；
+DB 异常只 log warning，不传播给 Runner。
 """
 
 from __future__ import annotations
@@ -27,10 +19,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # 通义 API 配置
+# 模型名通过环境变量 fallback，支持运维不改源码切换记忆系统的 LLM（m-7）。
 _QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "")
-_EMBED_MODEL   = "text-embedding-v3"
-_EMBED_DIM     = 1024
-_EXTRACT_MODEL = "qwen3-max"
+_EMBED_MODEL   = os.getenv("EVOPAW_MEMORY_EMBED_MODEL", "text-embedding-v3")
+_EMBED_DIM     = int(os.getenv("EVOPAW_MEMORY_EMBED_DIM", "1024"))
+_EXTRACT_MODEL = os.getenv("EVOPAW_MEMORY_EXTRACT_MODEL", "qwen3-max")
 
 _EXTRACT_PROMPT = """\
 分析以下一轮对话，提取结构化信息，以 JSON 格式返回：
@@ -80,10 +73,29 @@ def _get_llm_client():
 def _get_embed_client():
     global _embed_client
     if _embed_client is None:
-        # 💡 通义的 embedding API 与 chat API 共用同一 base_url（兼容 OpenAI 格式），
-        #    无需单独客户端类，_make_llm_client() 对两者通用。
+        # 通义 embedding 与 chat 共用 base_url 和 OpenAI 兼容格式，复用同一构造函数。
         _embed_client = _make_llm_client()
     return _embed_client
+
+
+def shutdown_index_clients() -> None:
+    """关闭模块级 LLM/embedding client；进程优雅退出时调用。
+
+    - OpenAI Python SDK v1+ 内部使用 httpx 连接池；不显式 close 会在 GC
+      时打印 ResourceWarning。
+    - 关闭后将单例置 None，下次调用 _get_*_client() 会重新惰性创建，
+      不影响在线热重载场景。
+    """
+    global _llm_client, _embed_client
+    for name, client in (("_llm_client", _llm_client), ("_embed_client", _embed_client)):
+        if client is None:
+            continue
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("close %s failed", name, exc_info=True)
+    _llm_client = None
+    _embed_client = None
 
 
 # ── Step 2：LLM 提取摘要 + 标签 ─────────────────────────────────
@@ -95,7 +107,7 @@ def extract_summary_and_tags(
 ) -> tuple[str, list[str]]:
     """调 LLM 提取一句话摘要 + 领域标签。
 
-    💡 核心点：每轮只调用一次模型；malformed JSON 时兜底，不抛异常
+    每轮只调用一次模型；malformed JSON 时兜底为 ``(user[:50], [])``，不抛异常。
     """
     prompt = _EXTRACT_PROMPT.format(
         user_message    = user_message[:500],
@@ -143,7 +155,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 def upsert_memory(conn: Any, record: dict[str, Any]) -> None:
     """写入一条记忆记录，id 相同时跳过（ON CONFLICT DO NOTHING 幂等）。
 
-    💡 核心点：search_text = user_message + tags，供 GIN 全文索引使用
+    ``search_text = user_message + tags``，供 GIN 全文索引使用。
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -187,8 +199,8 @@ async def async_index_turn(
 ) -> None:
     """每轮对话结束后后台触发的异步索引入口。
 
-    💡 核心点：asyncio.create_task() 调用此函数，不阻塞主流程返回
-    db_dsn 为空时静默跳过；DB 连接失败只 log，不抛异常。
+    ``asyncio.create_task()`` 调用，不阻塞主流程；``db_dsn`` 为空静默跳过；
+    DB 连接失败只 log warning，不抛异常。
     """
     if not db_dsn:
         return  # db_dsn 未配置，静默跳过
@@ -231,8 +243,7 @@ def _index_single_turn(
             "summary":         summary,
             "tags":            tags,
             "turn_ts":         turn_ts,
-            # 💡 str(list) 输出 "[0.1, 0.2, ...]"，与 pgvector 期望格式一致。
-            #    若 embed_texts 返回 numpy array，需先调用 .tolist()。
+            # str(list) 与 pgvector 期望格式一致；如改用 numpy array 需 .tolist()。
             "summary_vec":     vecs[0] if vecs else [],
             "message_vec":     vecs[1] if len(vecs) > 1 else [],
             "search_text":     search_text,

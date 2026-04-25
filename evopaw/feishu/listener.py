@@ -16,13 +16,26 @@ from lark_oapi.ws.client import EventDispatcherHandler
 
 from evopaw.feishu.session_key import resolve_routing_key
 from evopaw.models import Attachment, InboundMessage
-from evopaw.observability.metrics import record_feishu_event, record_inbound_message
+from evopaw.observability.metrics import (
+    record_error,
+    record_feishu_event,
+    record_inbound_message,
+)
 
 logger = logging.getLogger(__name__)
 
 
 OnMessageFn = Callable[[InboundMessage], Awaitable[None]]
 OnBotAddedFn = Callable[[str, str], Awaitable[None]]
+
+
+def _on_dispatch_done(future) -> None:
+    """asyncio.run_coroutine_threadsafe future 完成回调：异常时记录而非吞噬（M-6）."""
+    try:
+        future.result()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("feishu listener: dispatched coroutine failed")
+        record_error("feishu_listener", type(exc).__name__)
 
 
 class _EvoPawEventHandler(EventDispatcherHandler):
@@ -74,9 +87,10 @@ class _EvoPawEventHandler(EventDispatcherHandler):
                 if not self._is_chat_allowed(chat_id, "group"):
                     return
                 if self._on_bot_added is not None:
-                    asyncio.run_coroutine_threadsafe(
+                    fut = asyncio.run_coroutine_threadsafe(
                         self._on_bot_added(chat_id, group_name), self._loop
                     )
+                    fut.add_done_callback(_on_dispatch_done)
                 return
 
             if event_type != "im.message.receive_v1":
@@ -134,9 +148,13 @@ class _EvoPawEventHandler(EventDispatcherHandler):
             record_inbound_message(routing_key, has_attachment=attachment is not None)
 
             # 在主事件循环中调度 Runner.dispatch
-            asyncio.run_coroutine_threadsafe(self._on_message(inbound), self._loop)
-        except Exception:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._on_message(inbound), self._loop
+            )
+            fut.add_done_callback(_on_dispatch_done)
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to handle im.message.receive_v1 websocket event")
+            record_error("feishu_listener", type(exc).__name__)
 
 
 class FeishuListener:

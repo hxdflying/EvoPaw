@@ -341,6 +341,59 @@ class TestHandlerExceptionInBody:
             # should NOT raise — exception is caught and logged
             handler.do_without_validation(_make_im_receive_payload())
 
+    async def test_exception_records_error_metric(self):
+        """M-6：handler 异常时调用 record_error 上报"""
+        loop = asyncio.get_event_loop()
+        handler = _EvoPawEventHandler(loop=loop, on_message=AsyncMock())
+
+        with patch(
+            "evopaw.feishu.listener.resolve_routing_key",
+            side_effect=RuntimeError("unexpected error"),
+        ), patch(
+            "evopaw.feishu.listener.record_error"
+        ) as mock_record:
+            handler.do_without_validation(_make_im_receive_payload())
+
+        mock_record.assert_called_once()
+        args = mock_record.call_args[0]
+        assert args[0] == "feishu_listener"
+        assert args[1] == "RuntimeError"
+
+    async def test_dispatch_failure_recorded_via_callback(self):
+        """M-6：dispatched coroutine 失败时 done_callback 调用 record_error"""
+        loop = asyncio.get_event_loop()
+
+        async def failing_on_message(inbound):
+            raise RuntimeError("dispatch error")
+
+        handler = _EvoPawEventHandler(loop=loop, on_message=failing_on_message)
+
+        with patch("evopaw.feishu.listener.record_error") as mock_record:
+            handler.do_without_validation(_make_im_receive_payload())
+            # 等待 run_coroutine_threadsafe 调度的协程完成
+            await asyncio.sleep(0.1)
+
+        # done_callback 应记录错误
+        mock_record.assert_called_once()
+        args = mock_record.call_args[0]
+        assert args[0] == "feishu_listener"
+        assert args[1] == "RuntimeError"
+
+    async def test_successful_dispatch_no_error_recorded(self):
+        """M-6：dispatched coroutine 正常完成时不调 record_error"""
+        loop = asyncio.get_event_loop()
+
+        async def ok_on_message(inbound):
+            return None
+
+        handler = _EvoPawEventHandler(loop=loop, on_message=ok_on_message)
+
+        with patch("evopaw.feishu.listener.record_error") as mock_record:
+            handler.do_without_validation(_make_im_receive_payload())
+            await asyncio.sleep(0.1)
+
+        mock_record.assert_not_called()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 功能一：post 富文本消息解析

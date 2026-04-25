@@ -1,24 +1,4 @@
-"""上下文生命周期管理
-
-💡【第19课·三把剪刀】Context 不加控制会无限膨胀，拖慢推理、撑爆 token 限制。
-三种手术刀各司其职：
-
-1. prune_tool_results  — 剪枝：把过时的 tool result 替换为占位符
-   场景：tool result 通常是大段 JSON/HTML，但 agent 早已不需要
-   策略：保留最近 keep_turns 轮，更早的内容替换为 [已剪枝]
-
-2. chunk_by_tokens     — 分块：将消息列表按近似 token 数切片
-   用于 maybe_compress 内部，每块独立压缩
-
-3. maybe_compress      — 压缩：超过 context 使用率阈值时，把旧消息摘要化
-   场景：长时间对话，即使剪枝后还是太长
-   策略：保留 system 消息 + 最近 fresh_keep_turns 轮，旧消息分块摘要
-
-4. ctx.json 持久化    — 跨 session 恢复：save / load / append_raw
-   save_session_ctx   → 覆盖写 {session_id}_ctx.json（压缩快照）
-   load_session_ctx   → 读取，不存在时返回 []
-   append_session_raw → 追加写 {session_id}_raw.jsonl（完整审计日志）
-"""
+"""上下文生命周期管理：剪枝 / 分块 / 压缩 + ctx.json 持久化。"""
 
 from __future__ import annotations
 
@@ -31,12 +11,14 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# 默认参数（与 m3l19 演示代码保持一致）
+# 默认参数
+# _MODEL_CTX_LIMIT 对齐现役主 Agent 模型（Claude Sonnet 4.6 / Haiku 4.5 均为 200k）。
+# 用 Opus 4.7（1M）时本阈值仍按 200k 计算，超过 90k token 时触发摘要——对长对话仍有意义。
 _PRUNE_KEEP_TURNS   = 10
 _CHUNK_TOKENS       = 2000
 _FRESH_KEEP_TURNS   = 10
 _COMPRESS_THRESHOLD = 0.45
-_MODEL_CTX_LIMIT    = 32000
+_MODEL_CTX_LIMIT    = 200000
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -50,13 +32,8 @@ def prune_tool_results(
 ) -> None:
     """in-place 剪枝：超出 keep_turns 的 tool 消息内容替换为 [已剪枝]。
 
-    💡 为什么保留占位而不直接删除消息：
-    tool_call_id 链路必须完整（tool 消息 id 对应 assistant 的 tool_calls）。
-    直接删除会导致 OpenAI/Qwen 格式校验报错，保留消息结构但清空内容更安全。
-
-    Args:
-        messages: LLM 消息列表（in-place 修改）
-        keep_turns: 保留最近 N 轮的完整 tool result
+    保留占位而不直接删除：tool_call_id 链路必须完整（tool 消息 id 对应
+    assistant 的 tool_calls），直接删除会导致 OpenAI/Qwen 格式校验报错。
     """
     user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
     if len(user_indices) <= keep_turns:
@@ -80,10 +57,8 @@ def chunk_by_tokens(
 ) -> list[list[dict]]:
     """按近似 token 数切分消息列表。
 
-    💡 token 估算：中文 1 字 ≈ 1 token，英文 4 字 ≈ 1 token，
-    取保守值 len(content) // 2。宁多算不少算，防止实际超限。
-
-    单条消息超过 chunk_tokens 时独立成一个 chunk（不截断消息内容）。
+    Token 估算用 ``len(content) // 2`` 保守值（中文 1 字≈1 token、英文 4 字≈1 token）。
+    单条消息超过 chunk_tokens 时独立成一个 chunk，不截断内容。
     """
     if not messages:
         return []
@@ -125,6 +100,9 @@ _SUMMARY_PROMPT = """\
 {history}
 """
 
+# 摘要 LLM 模型名通过环境变量 fallback（m-7），运维可在不改源码情况下切换。
+_SUMMARY_MODEL = os.getenv("EVOPAW_MEMORY_SUMMARY_MODEL", "qwen3-turbo")
+
 
 def _make_summary_client():
     """创建摘要用的 LLM client（OpenAI 兼容格式，通义 DashScope）。"""
@@ -144,7 +122,7 @@ def _summarize_chunk(messages: list[dict]) -> str:
             for m in messages
         )
         resp = client.chat.completions.create(
-            model="qwen3-turbo",
+            model=_SUMMARY_MODEL,
             messages=[
                 {"role": "user", "content": _SUMMARY_PROMPT.format(history=history)},
             ],
@@ -165,20 +143,12 @@ def maybe_compress(
 ) -> None:
     """in-place 压缩：超过 context 使用率阈值时，将旧消息摘要化。
 
-    💡 触发条件：approx_tokens / model_ctx_limit > compress_threshold
-    保留策略：system 消息全保留 + 最近 fresh_keep_turns 轮原文 + 旧消息变摘要
-
-    Args:
-        messages: LLM 消息列表（in-place 修改）
-        model_ctx_limit: 模型上下文窗口大小（token 数）
-        fresh_keep_turns: 压缩时保留最近 N 轮不压缩
-        chunk_tokens: 每个压缩块的近似 token 数
-        compress_threshold: 上下文使用率超过此值才触发
+    触发条件：``approx_tokens / model_ctx_limit > compress_threshold``。
+    保留策略：system 消息全保留 + 最近 fresh_keep_turns 轮原文 + 旧消息变摘要。
     """
     model_limit = model_ctx_limit
-    # 💡 只统计非 system 消息的 token。
-    #    system 消息（含压缩后插入的 <context_summary>）由框架/本函数自行控制，
-    #    若一并计入阈值，每轮压缩后插入的摘要 system 消息会累积，导致下轮更快触发压缩——"雪崩效应"。
+    # 只统计非 system 消息的 token。压缩后插入的 <context_summary> system 消息
+    # 若一并计入阈值，会逐轮累积导致更快触发压缩（雪崩）。
     non_system = [m for m in messages if m.get("role") != "system"]
     approx_tokens = sum(len(str(m.get("content", ""))) // 2 for m in non_system)
     if approx_tokens / model_limit < compress_threshold:
@@ -238,9 +208,7 @@ def append_session_raw(
 ) -> None:
     """追加消息到原始完整历史（append-only JSONL，保留所有中间过程）。
 
-    💡 两份存储职责分工：
-    - ctx.json   → 压缩后快照，用于跨 session 快速恢复
-    - raw.jsonl  → 完整审计日志，用于 debug 和分析
+    两份存储分工：``ctx.json`` 为压缩快照，``raw.jsonl`` 为完整审计日志。
     """
     if not messages:
         return

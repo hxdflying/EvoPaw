@@ -236,3 +236,104 @@ class TestClearAll:
         await mgr.clear_all()
         entry = await mgr.get_or_create("p2p:ou_a")
         assert entry.id.startswith("s-")
+
+
+# ── _jsonl_locks LRU 上限（M-1 修复）──────────────────────────
+
+
+class TestJsonlLocksLRU:
+    """jsonl_locks dict 不应无限增长"""
+
+    async def test_lock_count_capped_after_many_appends(self, tmp_path):
+        """append 次数远超上限时，_jsonl_locks 大小不超过 max"""
+        mgr = SessionManager(data_dir=tmp_path, jsonl_locks_max=5)
+        for i in range(20):
+            sid = f"s-test-{i:03d}"
+            # 直接走 append 路径触发 lock 注册
+            mgr._jsonl_locks  # noqa: B018 — 仅为了让 mypy 认知字段
+            await mgr.append(
+                sid, user="hi", feishu_msg_id=f"m{i}", assistant="ok",
+            )
+        # 上限 5，触发 LRU 后 dict 大小不应超过 max
+        assert len(mgr._jsonl_locks) <= 5
+
+    async def test_lock_reused_for_same_session(self, tmp_path):
+        """同一 session 多次 append 复用同一 Lock 实例（不重建）"""
+        mgr = SessionManager(data_dir=tmp_path)
+        sid = "s-reuse-001"
+        await mgr.append(sid, user="a", feishu_msg_id="m1", assistant="b")
+        first_lock = mgr._jsonl_locks[sid]
+        await mgr.append(sid, user="c", feishu_msg_id="m2", assistant="d")
+        second_lock = mgr._jsonl_locks[sid]
+        assert first_lock is second_lock
+
+    async def test_held_lock_not_evicted(self, tmp_path):
+        """正在被持有的 Lock 不会被 LRU 踢出（防止并发写入冲突）"""
+        mgr = SessionManager(data_dir=tmp_path, jsonl_locks_max=2)
+
+        # 占用 sid_held 的 lock
+        sid_held = "s-held"
+        held_lock = mgr._acquire_jsonl_lock(sid_held)
+        await held_lock.acquire()
+        try:
+            # 注入更多 entry 触发 LRU 踢出
+            for i in range(5):
+                mgr._acquire_jsonl_lock(f"s-other-{i}")
+            # held_lock 应仍在 dict 中
+            assert sid_held in mgr._jsonl_locks
+            assert mgr._jsonl_locks[sid_held] is held_lock
+        finally:
+            held_lock.release()
+
+    async def test_eviction_drops_oldest_unheld(self, tmp_path):
+        """LRU 踢出最旧的、未被持有的 entry"""
+        mgr = SessionManager(data_dir=tmp_path, jsonl_locks_max=3)
+        # 按顺序加入 4 个，其中前 1 个最旧应被踢
+        for i in range(4):
+            mgr._acquire_jsonl_lock(f"s-{i}")
+        assert len(mgr._jsonl_locks) == 3
+        assert "s-0" not in mgr._jsonl_locks
+        for i in range(1, 4):
+            assert f"s-{i}" in mgr._jsonl_locks
+
+    async def test_lru_refresh_on_reuse(self, tmp_path):
+        """使用已存在 entry 会刷新到 LRU 末尾，避免被先踢出"""
+        mgr = SessionManager(data_dir=tmp_path, jsonl_locks_max=3)
+        for i in range(3):
+            mgr._acquire_jsonl_lock(f"s-{i}")
+        # 刷新 s-0 到末尾
+        mgr._acquire_jsonl_lock("s-0")
+        # 加入第 4 个，应踢出 s-1（现在是最旧的）
+        mgr._acquire_jsonl_lock("s-3")
+        assert "s-0" in mgr._jsonl_locks
+        assert "s-1" not in mgr._jsonl_locks
+        assert "s-2" in mgr._jsonl_locks
+        assert "s-3" in mgr._jsonl_locks
+
+
+# ── clear_all 防护（M-2 修复）──────────────────────────────────
+
+
+class TestClearAllProtection:
+    """clear_all 不应清理仍被持有的 jsonl_lock，避免与并发 append 冲突"""
+
+    async def test_clear_skips_held_jsonl_lock(self, tmp_path):
+        """正在被持有的 jsonl lock 在 clear_all 后仍保留"""
+        mgr = SessionManager(data_dir=tmp_path)
+
+        held_sid = "s-held-001"
+        free_sid = "s-free-001"
+
+        # 注册两个 lock，其中一个被持有
+        held_lock = mgr._acquire_jsonl_lock(held_sid)
+        mgr._acquire_jsonl_lock(free_sid)
+        await held_lock.acquire()
+        try:
+            await mgr.clear_all()
+            # 持有中的应保留
+            assert held_sid in mgr._jsonl_locks
+            assert mgr._jsonl_locks[held_sid] is held_lock
+            # 未持有的应被清理
+            assert free_sid not in mgr._jsonl_locks
+        finally:
+            held_lock.release()

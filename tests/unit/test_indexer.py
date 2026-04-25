@@ -21,6 +21,7 @@ from evopaw.memory.indexer import (
     async_index_turn,
     embed_texts,
     extract_summary_and_tags,
+    shutdown_index_clients,
     upsert_memory,
 )
 
@@ -132,7 +133,8 @@ class TestEmbedTexts:
                 embed_texts(["文本"])
 
     def test_uses_correct_model_and_dim(self):
-        """调用时传入正确的 model 和 dimensions 参数"""
+        """调用时传入正确的 model 和 dimensions 参数（取自模块级常量）"""
+        import evopaw.memory.indexer as idx
         mock_resp = MagicMock()
         mock_resp.data = []
 
@@ -141,8 +143,10 @@ class TestEmbedTexts:
             embed_texts(["x"])
 
         call_kwargs = mock_client.return_value.embeddings.create.call_args.kwargs
-        assert call_kwargs["model"] == "text-embedding-v3"
-        assert call_kwargs["dimensions"] == 1024
+        # 默认值仍是 text-embedding-v3 / 1024，但通过模块常量读取，
+        # 避免硬编码字面值导致环境变量覆盖时测试反而失败。
+        assert call_kwargs["model"] == idx._EMBED_MODEL
+        assert call_kwargs["dimensions"] == idx._EMBED_DIM
 
 
 # ── upsert_memory ───────────────────────────────────────────────
@@ -359,3 +363,134 @@ class TestAsyncIndexTurn:
             )
 
         mock_conn.close.assert_called_once()
+
+
+# ── shutdown_index_clients ─────────────────────────────────────
+
+
+class TestShutdownIndexClients:
+    """关闭模块级 LLM/embedding client（M-3 修复）"""
+
+    def setup_method(self):
+        """每个 case 前清空模块级单例，避免相互污染"""
+        import evopaw.memory.indexer as idx
+        idx._llm_client = None
+        idx._embed_client = None
+
+    def teardown_method(self):
+        """收尾：再次清空，避免影响后续测试"""
+        import evopaw.memory.indexer as idx
+        idx._llm_client = None
+        idx._embed_client = None
+
+    def test_shutdown_calls_close_on_both_clients(self):
+        """两个 client 都被实例化时，shutdown 调用各自 close()"""
+        import evopaw.memory.indexer as idx
+
+        mock_llm = MagicMock()
+        mock_embed = MagicMock()
+        idx._llm_client = mock_llm
+        idx._embed_client = mock_embed
+
+        shutdown_index_clients()
+
+        mock_llm.close.assert_called_once()
+        mock_embed.close.assert_called_once()
+        assert idx._llm_client is None
+        assert idx._embed_client is None
+
+    def test_shutdown_when_clients_none_no_error(self):
+        """两个 client 都未实例化时，shutdown 不抛异常"""
+        # setup_method 已确保是 None
+        shutdown_index_clients()  # 不应抛异常
+
+    def test_shutdown_only_one_client_set(self):
+        """只有一个 client 实例化时，另一个保持 None 不报错"""
+        import evopaw.memory.indexer as idx
+
+        mock_llm = MagicMock()
+        idx._llm_client = mock_llm
+        idx._embed_client = None
+
+        shutdown_index_clients()
+
+        mock_llm.close.assert_called_once()
+        assert idx._llm_client is None
+        assert idx._embed_client is None
+
+    def test_shutdown_swallows_close_exception(self):
+        """client.close() 抛异常时被吞掉，不向上抛（避免阻塞进程退出）"""
+        import evopaw.memory.indexer as idx
+
+        bad_client = MagicMock()
+        bad_client.close.side_effect = RuntimeError("network broken")
+        idx._llm_client = bad_client
+
+        # 不应抛异常
+        shutdown_index_clients()
+        assert idx._llm_client is None
+
+    def test_shutdown_then_lazy_recreate(self):
+        """shutdown 后，下次调用 _get_*_client() 应重新惰性创建"""
+        import evopaw.memory.indexer as idx
+
+        mock_llm = MagicMock()
+        idx._llm_client = mock_llm
+        shutdown_index_clients()
+        assert idx._llm_client is None
+
+        # 重新调用 _get_llm_client() 应触发 _make_llm_client()
+        new_client = MagicMock()
+        with patch("evopaw.memory.indexer._make_llm_client", return_value=new_client):
+            result = idx._get_llm_client()
+        assert result is new_client
+        assert idx._llm_client is new_client
+
+
+# ── m-7：模型可配置（环境变量覆盖默认值）───────────────────────
+
+
+class TestModelEnvOverride:
+    """验证模块级模型常量从环境变量读取，未设置时回退到默认值"""
+
+    def test_default_models_when_env_unset(self):
+        """未设置任何环境变量时使用默认值"""
+        import importlib
+        import evopaw.memory.indexer as idx
+        with patch.dict("os.environ", {}, clear=False):
+            for k in ("EVOPAW_MEMORY_EMBED_MODEL", "EVOPAW_MEMORY_EMBED_DIM",
+                      "EVOPAW_MEMORY_EXTRACT_MODEL"):
+                if k in __import__("os").environ:
+                    del __import__("os").environ[k]
+            importlib.reload(idx)
+            assert idx._EMBED_MODEL == "text-embedding-v3"
+            assert idx._EMBED_DIM == 1024
+            assert idx._EXTRACT_MODEL == "qwen3-max"
+        # reload 一次以恢复（不影响其它测试，因为下次 import 仍取当前 env）
+        importlib.reload(idx)
+
+    def test_env_override_indexer_models(self):
+        """环境变量设置后模块级常量被覆盖"""
+        import importlib
+        import os as _os
+        import evopaw.memory.indexer as idx
+        with patch.dict(_os.environ, {
+            "EVOPAW_MEMORY_EMBED_MODEL": "custom-embed",
+            "EVOPAW_MEMORY_EMBED_DIM": "768",
+            "EVOPAW_MEMORY_EXTRACT_MODEL": "custom-extract",
+        }):
+            importlib.reload(idx)
+            assert idx._EMBED_MODEL == "custom-embed"
+            assert idx._EMBED_DIM == 768
+            assert idx._EXTRACT_MODEL == "custom-extract"
+        importlib.reload(idx)  # 恢复默认
+
+    def test_env_override_summary_model(self):
+        """context_mgmt._SUMMARY_MODEL 受环境变量控制"""
+        import importlib
+        import os as _os
+        import evopaw.memory.context_mgmt as ctx
+        with patch.dict(_os.environ, {"EVOPAW_MEMORY_SUMMARY_MODEL": "custom-summary"}):
+            importlib.reload(ctx)
+            assert ctx._SUMMARY_MODEL == "custom-summary"
+        importlib.reload(ctx)  # 恢复默认

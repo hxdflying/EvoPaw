@@ -127,7 +127,7 @@ class TestLoad:
     async def test_loads_jobs_from_tasks_json(self, data_dir, dispatcher):
         """从 tasks.json 加载 jobs"""
         _write_tasks(data_dir, [_make_at_job(at_ms=_now_ms() + 60000)])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             assert len(svc.jobs) == 1
@@ -138,7 +138,7 @@ class TestLoad:
     async def test_empty_tasks_file(self, data_dir, dispatcher):
         """空 tasks.json 不报错"""
         _write_tasks(data_dir, [])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             assert len(svc.jobs) == 0
@@ -147,7 +147,7 @@ class TestLoad:
 
     async def test_no_tasks_file(self, data_dir, dispatcher):
         """tasks.json 不存在时也不报错"""
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             assert len(svc.jobs) == 0
@@ -159,7 +159,7 @@ class TestLoad:
         job = _make_at_job()
         job["enabled"] = False
         _write_tasks(data_dir, [job])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             assert len(svc.jobs) == 0
@@ -174,7 +174,7 @@ class TestAtSchedule:
     async def test_fires_at_specified_time(self, data_dir, dispatcher):
         """at 模式在指定时间触发"""
         _write_tasks(data_dir, [_make_at_job(at_ms=_now_ms() + 50)])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             msg = await dispatcher.wait_for_dispatch(timeout=2.0)
@@ -190,7 +190,7 @@ class TestAtSchedule:
             data_dir,
             [_make_at_job(at_ms=_now_ms() + 50, delete_after_run=True)],
         )
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             await dispatcher.wait_for_dispatch(timeout=2.0)
@@ -211,7 +211,7 @@ class TestAtSchedule:
             data_dir,
             [_make_at_job(at_ms=_now_ms() + 50, delete_after_run=False)],
         )
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             await dispatcher.wait_for_dispatch(timeout=2.0)
@@ -233,7 +233,7 @@ class TestEverySchedule:
     async def test_fires_repeatedly(self, data_dir, dispatcher):
         """every 模式重复触发"""
         _write_tasks(data_dir, [_make_every_job(every_ms=100)])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             # 等待至少 2 次触发
@@ -248,7 +248,7 @@ class TestEverySchedule:
     async def test_every_updates_next_run(self, data_dir, dispatcher):
         """every 触发后 next_run_at_ms 递增"""
         _write_tasks(data_dir, [_make_every_job(every_ms=100)])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             await dispatcher.wait_for_dispatch(timeout=2.0)
@@ -267,7 +267,7 @@ class TestHotReload:
     async def test_detects_new_jobs(self, data_dir, dispatcher):
         """tasks.json 变更后 CronService 自动感知新 job"""
         _write_tasks(data_dir, [])
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             assert len(svc.jobs) == 0
@@ -299,7 +299,7 @@ class TestInboundConstruction:
                 )
             ],
         )
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         try:
             msg = await dispatcher.wait_for_dispatch(timeout=2.0)
@@ -322,7 +322,7 @@ class TestStopSafety:
         _write_tasks(
             data_dir, [_make_every_job(every_ms=50)]
         )
-        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch)
+        svc = CronService(data_dir=data_dir, dispatch_fn=dispatcher.dispatch, tick_interval=0.05)
         await svc.start()
         await dispatcher.wait_for_dispatch(timeout=2.0)
         await svc.stop()
