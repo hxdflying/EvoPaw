@@ -1,740 +1,235 @@
 # EvoPaw 基于 Hermes Agent 的改进方案
 
-> 基于 `NousResearch/hermes-agent` 的仓库、官方文档与功能设计，对照 `EvoPaw` 当前实现，给出一份更偏“长期运行 Agent 操作系统”的升级方案。
+> 本文基于 2026-04-24 对 `NousResearch/hermes-agent` `main` 分支的再次阅读，重新校准 EvoPaw 的改进方向。
 >
-> 文档定位：这是对现有 [docs/harness-improvement-plan.md](./harness-improvement-plan.md) 的补充与升级，不重复六层 Harness 模式的基础结论，而是重点吸收 Hermes 已经产品化落地的那部分能力。
+> 文档定位：这是对 [harness-improvement-plan.md](./harness-improvement-plan.md) 的产品化运行时补充。前者回答“Agent Harness 应有哪些层”，本文回答“这些层如何落成一个可长期运行、可治理、可自我改进的 Agent Runtime”。
 
 ---
 
-## 1. 结论先行
+## 0. 本次优化结论
 
-Hermes Agent 最值得借鉴的，不是“它有更多工具”或“它支持更多平台”，而是它把 Agent 当成了一个**长期运行、持续学习、可治理、可扩展的运行时系统**来设计。
+Hermes Agent 最值得 EvoPaw 学的不是多平台数量、工具数量或供应商数量，而是它把 Agent 运行时拆成了一组稳定契约：
 
-对 EvoPaw 来说，这意味着改进重点不应只放在“再加几个 Skill”，而应转向下面六条主线：
+- 稳定 system prompt snapshot 与每轮 ephemeral overlay 分离。
+- 记忆是有界热记忆 + 会话搜索 + 可选外部 provider，而不是无限追加文件。
+- Skills 是可创建、可 patch、可扫描、可回滚的 procedural memory。
+- 工具不是散落的函数，而是带 toolset、availability、result budget、approval gate 的 registry。
+- session store 是检索、恢复、统计、成本、压缩 lineage、学习闭环的数据根。
+- cron/delegation/subagent 都是 fresh execution context，不能偷用普通对话的隐式上下文。
 
-1. **把学习闭环做实**：从“能创建 Skill”升级为“能从任务经验中产生候选 Skill、评测、灰度、修补、淘汰”。
-2. **把记忆重新分层**：从“Bootstrap 文件 + ctx.json + pgvector”升级为“热记忆快照 + 会话检索 + 冷记忆/用户建模”。
-3. **把 Prompt / Context 工程独立成子系统**：让 system prompt、上下文压缩、检索恢复、子目录上下文发现成为显式模块，而不是散落在 `main_agent.py` 里。
-4. **把安全从默认放行改成默认受控**：当前 `permission_mode="bypassPermissions"` 是最大风险点，需要尽快补齐审批、沙箱、路径与凭证隔离。
-5. **把 Skills 从“本地目录”升级为“技能供应链”**：支持生命周期、来源、信任级别、外部目录、候选区和自演化。
-6. **把 Feishu 机器人升级为平台化 Agent Runtime**：短期不必追 Hermes 那样的多平台规模，但架构上要从 Feishu 专用管道升级为 gateway-core + adapter 模式。
+对 EvoPaw 的改进优先级因此需要重新排序：
 
-一句话概括：**Hermes 给 EvoPaw 的最大启发，是从“会做事的聊天机器人”走向“会长期积累、会自我优化、可被治理的 Agent 系统”。**
+1. `P0` 先修运行时安全与上下文边界：停止生产默认 `bypassPermissions`，缩小 Sub-Agent cwd，补危险命令审批、路径校验、context 文件扫描、tool result 上限。
+2. `P0` 同步建立 `prompt_builder`、`memory_service`、`state.db + FTS5 session_search` 三个基础件。
+3. `P1` 再做 Skill 生命周期、tool registry/toolsets、ContextEngine、cron fresh task runtime。
+4. `P2` 才把 `skill-creator` 的 eval 资产接入反思闭环，做候选 skill 的 quarantine/canary/promote。
+5. `P3` 再考虑 provider runtime、gateway core、多平台、workflow/code execution、外部 memory provider。
 
----
-
-## 2. 这份方案与现有 Harness 方案的关系
-
-`docs/harness-improvement-plan.md` 已经覆盖了六层 Harness 的基础方向，尤其是：
-
-- 记忆三层分离
-- Skill 渐进式披露
-- 工具安全与权限
-- 上下文预算控制
-- 多 Agent 协调
-- 生命周期与扩展点
-
-Hermes 给出的新增价值，主要体现在下面这些“更产品化、更运行时化”的方面：
-
-| 维度 | 现有 Harness 方案 | Hermes 带来的新启发 | 对 EvoPaw 的意义 |
-|---|---|---|---|
-| 记忆 | 偏重记忆分层与写入通道 | 强调有界热记忆、主动保存、会话搜索、用户建模插件 | 让记忆从“能存”变成“好用、可控、可扩展” |
-| Skill | 偏重前端元数据和懒加载 | 强调 `skill_manage`、外部目录、技能 Hub、候选区、版本/来源治理 | 让 Skill 从静态目录升级为持续演化资产 |
-| 上下文 | 偏重压缩与预算 | 强调 prompt 稳定前缀、双层压缩、上下文引擎插件、子目录上下文发现 | 让上下文工程不再散落在业务代码里 |
-| 安全 | 偏重 fail-closed 原则 | 已实现危险命令审批、容器边界、上下文扫描、MCP 凭证过滤、路径校验 | 给 EvoPaw 提供一套可落地的防线模板 |
-| 多 Agent | 偏重 Coordinator/Worker 思想 | 已实现 fresh-context delegation、并行子代理、代码执行 RPC | 给 EvoPaw 提供更通用的子任务执行框架 |
-| 生命周期 | 偏重 hooks 思想 | 已落地 gateway hooks、session lineage、background maintenance、profiles | 让扩展性真正进入可运营阶段 |
-
-**建议采纳方式**：
-
-- 把 `harness-improvement-plan.md` 视为 EvoPaw 的“基础方法论版本”。
-- 把本文件视为 EvoPaw 的“产品化运行时版本”。
-- 后续真正拆分实施计划时，应该以本文件为主，以前一份作为底层设计原则的参考。
+一句话：**EvoPaw 不应该照搬 Hermes 的“大一体式 agent loop”，而应该吸收 Hermes 已经验证过的运行时契约，并保持 EvoPaw 当前较好的模块化边界。**
 
 ---
 
-## 3. Hermes Agent 的关键设计模式
+## 1. 对 Hermes Agent 的再理解
 
-下面是我认为对 EvoPaw 最有借鉴价值的 Hermes 设计模式。
+这次重点对照了 Hermes 的实现文件，而不只看 README/文档页。下表列出对 EvoPaw 最有迁移价值的上游事实：
 
-### 3.1 稳定的 Prompt 装配层
-
-Hermes 明确区分：
-
-- **缓存友好的稳定 system prompt 层**
-- **只在当前 API 调用时生效的临时 overlay**
-
-它把 `SOUL.md`、`MEMORY.md`、`USER.md`、skills index、context files、platform hint 等分层组装，并强调**system prompt 在会话中尽量不变**。这直接服务于上下文稳定性与 prompt caching。
-
-对比 EvoPaw：
-
-- `build_bootstrap_prompt()` 负责加载 `soul.md / user.md / agent.md / memory.md`
-- `ctx.json` 摘要和最近历史在 `evopaw/agents/main_agent.py` 中拼接
-- 这套逻辑能工作，但“稳定层”“会话层”“本次调用层”还没有明确边界
-
-这会导致两个问题：
-
-1. `ctx.json` 和 memory 的职责容易混淆
-2. 后续如果要做缓存、fallback、多 provider、插件化上下文，很难演化
-
-### 3.2 有界热记忆 + 会话检索 + 可选用户建模
-
-Hermes 的记忆不是“无限追加文件”，而是：
-
-- `MEMORY.md`：Agent 的稳定环境/项目记忆
-- `USER.md`：用户画像
-- 严格字符预算
-- `memory` 工具支持 `add/replace/remove`
-- 自动去重、容量控制、安全扫描
-- `session_search` 基于 SQLite FTS5 做跨会话搜索
-- 可选 Honcho memory provider 做更深层用户建模
-
-对比 EvoPaw：
-
-- `soul.md / user.md / agent.md / memory.md` 作为 Bootstrap 注入
-- `ctx.json` / `raw.jsonl` 承担会话级恢复
-- `pgvector` 提供语义搜索
-- `memory-save` 有规范，但执行闭环还不完整
-
-EvoPaw 当前最大问题不是“没有记忆”，而是**记忆层之间的角色边界不够清晰**：
-
-- `ctx.json` 更像会话快照，不应承担 durable memory
-- `memory.md` 当前更像索引文件，热记忆密度不足
-- `pgvector` 适合“语义近似召回”，但不适合取代结构化 session search
-
-### 3.3 闭环学习：Memory Nudge + Skill Manage + Search Recall
-
-Hermes README 里强调的 closed learning loop，不是口号，而是几种能力的组合：
-
-- 对话中学到稳定信息时主动写 memory
-- 复杂任务完成后把流程沉淀为 skill
-- Skill 可以被 `create/patch/edit/delete`
-- 跨会话问题优先用 `session_search`
-- 用户建模可以跨 session、跨平台累积
-
-对比 EvoPaw：
-
-- `skill-creator` 已能创建技能
-- `search_memory` 已能查历史
-- `memory-save` 已有规范
-- 但三者之间缺少统一的“反思-提炼-评测-发布”闭环
-
-值得强调的一点是：EvoPaw 现有 `evopaw/skills/skill-creator/` 目录里已经有一套很强的资产：
-
-- `run_eval.py`
-- `run_loop.py`
-- `aggregate_benchmark.py`
-- `grader.md`
-- `analyzer.md`
-- `comparator.md`
-
-这意味着 EvoPaw 并不是从零开始做自进化，而是**已经有评测土壤，但还没有接上运行时闭环**。
-
-### 3.4 Skills 不只是目录，而是供应链
-
-Hermes 的 Skills 设计比一般 Agent 项目成熟很多，关键点包括：
-
-- 单一 source of truth：`~/.hermes/skills/`
-- Progressive disclosure：list → full skill → reference file
-- agent-managed skills：可以 patch/edit，而不只是 create
-- external skill directories
-- skills hub / 安装 / 更新 / reset
-- quarantine / audit log / bundled manifest
-
-对比 EvoPaw：
-
-- `evopaw/tools/skill_loader.py` 已实现渐进式披露
-- `load_skills.yaml` 也已经形成注册表
-- 但 Skill 生命周期仍停留在“仓库内静态目录 + 用户/模型手工创建”
-
-Hermes 告诉我们的核心不是“也做一个技能商店”，而是：
-
-> **Skill 必须被当成一类可治理资产，而不是普通 Markdown 文件。**
-
-### 3.5 Tool Runtime / Sandboxing / Approval 是一等公民
-
-Hermes 的安全文档非常明确：它把安全边界拆成七层，包括用户授权、危险命令审批、容器隔离、MCP 凭证过滤、上下文文件扫描、跨会话隔离和路径/输入校验。
-
-对比 EvoPaw：
-
-- 当前 `build_main_agent_options()` 与 `build_sub_agent_options()` 都使用 `permission_mode="bypassPermissions"`
-- Sub-Agent 默认开放 `Bash / Read / Write / Edit / Grep / Glob`
-- 这能提高实验速度，但不适合长期运行和生产环境
-
-EvoPaw 的 README 里说“所有执行在容器内隔离”，方向是对的，但现阶段还缺少：
-
-- 危险命令审批
-- 永久 allowlist
-- 凭证白名单透传
-- 上下文文件注入扫描
-- cron 场景下的权限收缩
-
-### 3.6 Context Engine 应该是插件点，而不是工具函数集合
-
-Hermes 有一个很重要但很容易被忽略的设计：`ContextEngine` 抽象。
-
-这意味着：
-
-- 什么时候压缩
-- 怎么压缩
-- 是否暴露检索工具
-- 如何追踪 token 使用
-
-这些都不是硬编码在主循环里，而是可以被替换的引擎。
-
-对比 EvoPaw：
-
-- `evopaw/memory/context_mgmt.py` 已经有 prune / chunk / compress 三把剪刀
-- 但它还是工具函数级别，不是系统级策略对象
-
-如果 EvoPaw 后续要支持：
-
-- 更强的 token-aware 压缩
-- lossless retrieval
-- 更稳定的 tool-result compaction
-- 项目上下文的按需恢复
-
-那么 ContextEngine 抽象会非常关键。
-
-### 3.7 Session Store 是检索、分析、回放、治理的根
-
-Hermes 使用 SQLite + FTS5 存 session 元数据和消息历史，并支持：
-
-- full-text session search
-- lineage
-- 统计分析
-- 多进程 contention handling
-
-对比 EvoPaw：
-
-- `SessionManager` 使用 `index.json + s-*.jsonl`
-- 这对当前规模够用
-- 但它几乎无法支撑更高级能力：
-  - 复杂检索
-  - 会话 lineage
-  - insights 报表
-  - 技能效果回放
-  - 多 worker / 多实例写入治理
-
-### 3.8 Cron 应该是第一类 Agent Task，而不是“帮我再发一条消息”
-
-Hermes 的 cron 不是 shell cron，而是 first-class agent task：
-
-- fresh session
-- attached skills
-- normal static tool list
-- delivery target
-- 禁止 cron 中再递归创建 cron
-
-对比 EvoPaw：
-
-- `CronService` 到点后构造一条 `InboundMessage`
-- 直接回灌到现有 `Runner`
-- 本质上更像“自动发送一条消息”
-
-这种方式简单，但有几个问题：
-
-1. 会继承原对话上下文，导致定时任务被旧会话污染
-2. cron 任务与普通对话共享 session，难以审计
-3. 没有技能附件和权限裁剪
-4. 没有限制递归调度
-
-### 3.9 平台化 Gateway 比单平台 Listener 更适合长期演化
-
-Hermes 的 gateway-core + adapters + hooks + delivery path + token lock 设计，非常适合长期演化。
-
-EvoPaw 当前架构偏 Feishu 专用：
-
-- `feishu/listener.py`
-- `feishu/sender.py`
-- `runner.py`
-- `api/test_server.py`
-
-短期这完全没问题，但如果未来要支持：
-
-- 多工作区
-- 多 bot persona
-- 多渠道接入
-- 后台任务结果回送到不同 channel
-
-那就需要把“平台适配”和“Agent 核心运行时”剥离开。
-
----
-
-## 4. EvoPaw 当前状态：优势与核心短板
-
-### 4.1 当前优势
-
-EvoPaw 不是一个“从零开始”的项目，它已经有不少非常好的基础：
-
-- `SkillLoaderTool` 的渐进式披露已经成型
-- per-routing_key 串行队列模型合理
-- Feishu 接入体验与 thread/group/p2p 路由已经落地
-- `Bootstrap + ctx.json + pgvector` 三层记忆雏形清晰
-- `history_reader` 内联优化做得对
-- `skill-creator` 目录里已经有 benchmark / grader / analyzer 资产
-- `CronService`、`CleanupService`、`TestAPI`、Prometheus 说明系统性意识不错
-
-### 4.2 核心短板
-
-如果以 Hermes 为标尺，EvoPaw 当前最关键的短板有九个：
-
-1. **学习闭环未成型**：能 create skill，但不能自动反思、patch、评测、发布。
-2. **默认安全模型过弱**：`bypassPermissions` 直接跳过审批。
-3. **Prompt 装配边界不清晰**：Bootstrap、ctx、history、tool constraints 混在 `main_agent.py`。
-4. **缺少 session-level 结构化检索**：`pgvector` 很强，但不能替代 session_search。
-5. **Skill 生命周期缺失**：没有候选区、版本、来源、信任与统计。
-6. **cron 仍是“消息重放”模型**：不是 first-class task runtime。
-7. **上下文工程没有独立抽象层**：未来很难替换压缩策略。
-8. **平台内核与 Feishu 耦合较深**：扩展成本高。
-9. **provider/runtime 过于单一**：主模型、辅助模型、fallback、缓存、不同执行面都还没统一。
-
----
-
-## 5. 改进方案一：建立真正的闭环学习内核
-
-### 5.1 目标
-
-把 EvoPaw 从：
-
-- “用户要求时创建 Skill”
-
-升级为：
-
-- “任务完成后自动反思”
-- “识别是否应保存 memory”
-- “识别是否应创建/修补 Skill”
-- “用现有 benchmark/eval 资产验证候选改动”
-- “候选 Skill 先进入隔离区，再灰度发布”
-
-### 5.2 建议架构
-
-新增一个 `learning/` 子系统：
-
-```text
-evopaw/
-├── learning/
-│   ├── reflection.py         # 每轮或每任务结束后的反思入口
-│   ├── candidate_store.py    # Skill / memory / prompt 改动候选池
-│   ├── skill_lifecycle.py    # draft -> quarantine -> canary -> enabled
-│   ├── evaluator.py          # 复用 skill-creator 的 eval 脚本
-│   ├── heuristics.py         # 触发条件：复杂任务、用户纠正、重复流程
-│   └── telemetry.py          # 记录技能成功率、失败率、人工否决原因
-```
-
-### 5.3 触发条件
-
-建议先采用**启发式触发**，不要一开始就做全自动演化：
-
-- 同一任务中发生 `>=5` 次有效工具调用且最终成功
-- 用户明确纠正过流程
-- 同类工作流在 7 天内重复出现多次
-- 某 Skill 连续失败但用户/模型找到替代路径
-- 某 Skill 的 benchmark 长期低于阈值
-
-### 5.4 复用现有资产
-
-EvoPaw 不需要重新发明 skill evolution pipeline，因为 `skill-creator` 里已经有：
-
-- 触发评测：`run_eval.py`
-- 迭代优化：`run_loop.py`
-- benchmark 汇总：`aggregate_benchmark.py`
-- 执行结果评分：`grader.md`
-- 赛后分析：`analyzer.md`
-
-正确做法不是另起炉灶，而是：
-
-1. 用运行时反思逻辑产出候选 Skill/Description
-2. 把候选丢给这套现有评测链
-3. 评测通过后再进入发布流程
-
-### 5.5 生命周期设计
-
-建议把 Skill 生命周期标准化：
-
-| 状态 | 含义 | 是否对主 Agent 可见 |
+| Hermes 位置 | 已验证的关键设计 | 对 EvoPaw 的启发 |
 |---|---|---|
-| `draft` | 反思生成的初稿 | 否 |
-| `quarantine` | 已落盘，等待评测/审核 | 否 |
-| `canary` | 小流量/仅指定 routing_key 启用 | 部分可见 |
-| `enabled` | 正式启用 | 是 |
-| `deprecated` | 已不推荐，但保留 | 只读 |
-| `retired` | 下线归档 | 否 |
+| [`run_agent.py`](https://github.com/NousResearch/hermes-agent/blob/main/run_agent.py) | `AIAgent` 是主循环，负责 prompt、tool dispatch、fallback、compression、session persistence、background review | EvoPaw 不要复制 10k+ 行主循环，但要把主循环责任显式拆成模块 |
+| [`agent/prompt_builder.py`](https://github.com/NousResearch/hermes-agent/blob/main/agent/prompt_builder.py) | system prompt 由 identity、memory、skills index、context files、platform hints 等分层组装；context 文件进入 prompt 前扫描注入风险 | EvoPaw 需要把 `main_agent.py` 中的 prompt 拼接移到 `prompt_builder.py` |
+| [`tools/memory_tool.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/memory_tool.py) | `MEMORY.md` / `USER.md` 是 bounded entries；mid-session 写盘但不改变本轮 system prompt snapshot | EvoPaw 的热记忆应小而精，并区分“写入持久化”和“下轮才注入” |
+| [`tools/session_search_tool.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/session_search_tool.py) | FTS5 搜索命中消息，按 session 去重，再用辅助模型生成 focused summary | EvoPaw 不能只依赖 pgvector；需要精确短语/关键词历史召回 |
+| [`hermes_state.py`](https://github.com/NousResearch/hermes-agent/blob/main/hermes_state.py) | SQLite WAL + FTS5 + session lineage + token/cost/tool counts | `index.json + JSONL` 应降级为审计副本，状态主存储转向 SQLite |
+| [`tools/skill_manager_tool.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/skill_manager_tool.py) | `skill_manage` 支持 create/edit/patch/delete/write_file/remove_file；patch 是常用修复路径 | EvoPaw 的 `skill-creator` 应扩展为 Skill 管理服务，而不是只会创建 |
+| [`tools/skills_guard.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/skills_guard.py) | 外部 skill 安装前扫描，按 source/trust/verdict 决策 allow/block/ask | EvoPaw 做 external dirs 前必须先做 trust 和 scan |
+| [`tools/registry.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/registry.py) | 每个工具带 schema、toolset、check_fn、max_result_size、dispatch | EvoPaw 的 Skill Runtime 需要内部 tool registry，即使 Main Agent 仍只暴露 `skill_loader` |
+| [`tools/approval.py`](https://github.com/NousResearch/hermes-agent/blob/main/tools/approval.py) | 危险命令检测、session approval、permanent allowlist、smart approval、cron deny 策略集中在一个 gate | EvoPaw 需要单一 PermissionGate，不能让各 Skill 自己决定能不能执行 |
+| [`agent/context_engine.py`](https://github.com/NousResearch/hermes-agent/blob/main/agent/context_engine.py) | ContextEngine 抽象负责 token state、compression、session lifecycle、可选工具 | EvoPaw 需要从工具函数式 `context_mgmt.py` 升级到策略对象 |
+| [`agent/subdirectory_hints.py`](https://github.com/NousResearch/hermes-agent/blob/main/agent/subdirectory_hints.py) | 访问子目录时懒加载局部 `AGENTS.md` / `CLAUDE.md`，追加到 tool result 而不改 system prompt | EvoPaw 可做轻量局部上下文发现，且不破坏 prompt cache |
+| [`agent/memory_manager.py`](https://github.com/NousResearch/hermes-agent/blob/main/agent/memory_manager.py) | 内建 memory 永远存在，外部 memory provider 最多一个，统一 prefetch/sync/tool/hook | EvoPaw 可先做 local provider，再预留远端 provider，而不是马上接外部服务 |
+| [`cron/scheduler.py`](https://github.com/NousResearch/hermes-agent/blob/main/cron/scheduler.py) | cron 有独立 session、toolset、delivery、timeout、workdir、disabled toolsets | EvoPaw 的 CronService 应从“消息回灌”升级为 first-class task runtime |
+| [`hermes_cli/runtime_provider.py`](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/runtime_provider.py) | provider resolution 统一处理 API mode、base_url、credential pool、fallback | EvoPaw 现在不需要 18 个 provider，但需要统一模型/辅助任务路由 |
 
-### 5.6 优先级
-
-- `P0`：反思日志 + candidate store
-- `P1`：Skill 自动候选生成 + 离线评测接入
-- `P2`：自动 patch + canary 发布
+这些事实带来的最大调整是：**Hermes 的学习闭环依赖一组前置运行时能力。没有状态库、权限门、prompt 分层、memory service 和 skill lifecycle，直接做“自进化”会把错误固化为资产。**
 
 ---
 
-## 6. 改进方案二：把记忆升级为“热记忆快照 + 会话检索 + 冷记忆”
+## 2. EvoPaw 当前状态复盘
 
-### 6.1 关键判断
+### 2.1 已有优势
 
-相较于上一版 Harness 方案里偏“`memory.md` 做索引、详情放 topic 文件”，我建议 EvoPaw 改成更接近 Hermes 的模式：
+EvoPaw 已经具备一些很好的基础，不需要推倒重来：
 
-- **热记忆**：始终注入 prompt，必须小而精
-- **会话检索**：需要时搜索全部历史
-- **冷记忆/长文档**：按需打开
+- Main Agent 只通过 `skill_loader` 获取外部能力，渐进式披露方向正确。
+- `reference` / `task` 两类 Skill 清晰，任务型 Skill 用短生命周期 Sub-Agent 执行。
+- Feishu `p2p/group/thread` routing_key 模型已经落地。
+- per-routing_key 队列保证同一会话串行、不同会话并行。
+- `soul.md/user.md/agent.md/memory.md` bootstrap 和 `ctx.json/raw.jsonl/pgvector` 已经形成记忆雏形。
+- `history_reader` 内联是正确优化，避免把简单分页也交给 Sub-Agent。
+- `skill-creator` 目录已有 `run_eval.py`、`run_loop.py`、benchmark 聚合、grader/analyzer/comparator 等评测资产。
+- CronService、CleanupService、TestAPI、Prometheus 表明系统化意识已经存在。
 
-也就是说，不能把所有 durable memory 都外包给 topic 文件，否则模型每次都要额外检索；也不能把所有信息都塞进 `memory.md`，否则会膨胀失控。
+### 2.2 需要立即纠偏的短板
 
-### 6.2 目标分层
+下面这些短板会阻碍 EvoPaw 变成长期运行系统，应前置处理：
 
-建议重构为四层：
+1. `build_main_agent_options()` 与 `build_sub_agent_options()` 都使用 `permission_mode="bypassPermissions"`，生产长期运行风险过高。
+2. `SkillLoaderTool` 提示当前 session 是 `/workspace/sessions/{sid}`，但 task 型 Skill 实际传给 Sub-Agent 的 `session_path` 是 `/workspace`，cwd 边界过宽。
+3. `build_sub_agent_options()` 默认开放 `Bash/Read/Write/Edit/Grep/Glob`，没有按 Skill 元数据裁剪。
+4. `load_skills.yaml` 中部分 `path` 字段被注册表忽略，Skill 元数据存在双源漂移。
+5. `SKILL.md` frontmatter 当前主要只读 `description`，缺少 source/trust/status/allowed_tools/output_budget 等运行时字段。
+6. `ctx.json` 是裸 list，缺少 schema、captured_at、model、model_ctx_limit、compression_count、recovery pointer。
+7. `context_mgmt.py` 硬编码 `_MODEL_CTX_LIMIT = 32000`，与多模型/多 provider 演化冲突。
+8. `SessionManager` 使用 `index.json + JSONL`，可读但不支撑 FTS5、lineage、token/cost/tool analytics。
+9. `CronService` 只是构造 `InboundMessage` 回灌 `Runner`，默认继承普通消息路径，缺少 fresh session、tool policy、递归保护。
+10. Feishu 层已有 `sender_id`，但 agent/skill/runtime 没有充分利用用户身份做审批、审计和权限隔离。
 
-| 层级 | 作用 | 建议实现 |
-|---|---|---|
-| L0 Identity | 代理身份与规则 | `soul.md` + `agent.md` |
-| L1 Hot Memory | 高频 durable facts | `user.md` + `memory.md`，严格限额 |
-| L2 Session Snapshot | 当前/最近会话连续性 | `ctx.json` 或新 `conversation_snapshot.json` |
-| L3 Long-tail Recall | 历史会话与长尾知识 | SQLite FTS5 + pgvector + topic files |
+---
 
-### 6.3 本地 Memory Tool 化
+## 3. 迁移原则
 
-新增统一的 `memory_service`，不要再依赖“让 Skill 自己操作文件”作为主路径：
+### 3.1 学运行时契约，不学文件体量
+
+Hermes 的 `run_agent.py` 很强，但也很大。EvoPaw 当前模块边界更清晰，应该保留：
+
+- `agents/main_agent.py` 只做 Agent turn 编排。
+- `tools/skill_loader.py` 只做 Skill discovery / invocation。
+- `memory/`、`session/`、`cron/`、`llm/` 各自独立演进。
+
+优化方向不是把逻辑塞进一个“超级主循环”，而是把 Hermes 主循环里的职责拆回 EvoPaw 的模块：
+
+| 职责 | EvoPaw 目标归属 |
+|---|---|
+| prompt assembly | `evopaw/agent_runtime/prompt_builder.py` |
+| memory writes and hot snapshot | `evopaw/memory/service.py` |
+| session persistence/search | `evopaw/session_store/` 或 `evopaw/session/db.py` |
+| tool/skill policy | `evopaw/runtime/tool_registry.py` + `evopaw/security/permission_gate.py` |
+| context compression | `evopaw/context/engine.py` |
+| cron isolated execution | `evopaw/cron/agent_runner.py` |
+| learning loop | `evopaw/learning/` |
+
+### 3.2 Main Agent 仍保持窄工具面
+
+Hermes 直接给 Agent 暴露很多 tool schemas。EvoPaw 当前“Main Agent 只看见 `skill_loader`”是一个更强的治理边界，不应轻易放弃。
+
+建议保留：
+
+- Main Agent 只暴露 `skill_loader`。
+- Skill Runtime 内部再引入 tool registry/toolsets。
+- Sub-Agent 的工具面由 Skill frontmatter + PermissionGate 决定。
+
+也就是说，Hermes 的 tool registry 对 EvoPaw 的迁移目标不是“把所有工具暴露给主模型”，而是“给 Skill 执行层建立统一工具治理”。
+
+### 3.3 热记忆与 topic-first 冷记忆并不冲突
+
+上一份 Harness 方案强调 topic-first memory。Hermes 强调 bounded hot memory。两者可以组合：
+
+- `user.md` / `memory.md`：小而精的热记忆，始终注入或按稳定 prompt snapshot 注入。
+- `memory/topics/*.md`：冷记忆/长文档/项目事实，按需检索或打开。
+- `state.db + FTS5`：会话历史精确搜索。
+- `pgvector`：跨会话语义召回和 learning sample mining。
+
+关键是不要让 `memory.md` 变成无限增长日志，也不要让所有 durable facts 都沉到 topic 文件导致每轮都需要检索。
+
+### 3.4 cron、delegation、subagent 默认 fresh context
+
+Hermes 的一个核心纪律是：子任务默认不知道父上下文。
+
+EvoPaw 应明确：
+
+- Cron 任务默认 fresh session。
+- Sub-Agent 默认只知道 `skill_instructions + task_context + declared inputs`。
+- Delegation 如果未来引入，必须显式传入背景，不继承完整对话。
+- 任何自动任务不能创建新的自动任务，除非显式授权。
+
+---
+
+## 4. P0：先修运行时不变量
+
+P0 不是“功能期”，而是把长期运行的底线补齐。建议 1-2 周内优先做完。
+
+### 4.1 收紧 Sub-Agent 执行边界
+
+当前问题：
+
+- `skill_loader.py` 中 task 型 Skill 调用 `run_skill_agent(..., session_path="/workspace")`。
+- `claude_client.py` 中 Sub-Agent 默认有广泛文件/命令工具。
+
+目标：
+
+- Sub-Agent cwd 必须是 `/workspace/sessions/{session_id}`。
+- Skill 资源通过只读挂载路径 `/mnt/skills/{skill_name}` 访问。
+- 输出只允许写到 session `outputs/`、`tmp/`，需要发布到 Feishu 的文件走 Sender/Delivery 层。
+- 默认工具集从 `Bash/Read/Write/Edit/Grep/Glob` 改为按 Skill 声明裁剪。
+
+建议变更：
+
+- 修改 `evopaw/tools/skill_loader.py`：
+  - `_workspace_root = "/workspace"` 改为 `_session_dir = f"/workspace/sessions/{session_id}"`。
+  - 传入 `session_path=_session_dir`。
+  - 对 `task_context` 增加最大长度限制和结构化解析错误返回。
+- 修改 `evopaw/llm/claude_client.py`：
+  - `build_sub_agent_options(..., allowed_tools=None, permission_mode=None)`。
+  - 默认 allowed_tools 来自 Skill metadata。
+  - 生产默认 permission_mode 不再是 `bypassPermissions`。
+
+验收标准：
+
+- 任意 task Skill 的 cwd 都不能读写其他 session。
+- `../`、绝对路径逃逸、symlink 逃逸都会被拒绝。
+- 没有 `allowed_tools` 的 Skill 不默认获得 Bash。
+
+### 4.2 建立 PermissionGate
+
+Hermes 的危险命令系统集中在 `tools/approval.py`。EvoPaw 应实现一个更小但同样集中的版本：
 
 ```text
-evopaw/memory/
-├── service.py          # add / replace / remove / usage
-├── scanner.py          # prompt injection / invisible unicode / exfiltration scan
-├── quota.py            # 容量限制和压缩策略
-├── providers/
-│   ├── local.py        # 本地文件 provider
-│   └── remote.py       # 未来 Honcho-like provider
+PermissionGate.check(
+    actor="main_agent" | "sub_agent" | "cron" | "skill_script",
+    session_id=...,
+    routing_key=...,
+    sender_id=...,
+    skill_name=...,
+    tool_name=...,
+    args=...,
+) -> PermissionDecision
 ```
 
-建议支持操作：
+决策结果：
 
-- `add(target="memory" | "user", content=...)`
-- `replace(target=..., old_text=..., content=...)`
-- `remove(target=..., old_text=...)`
-- `usage()`
+| action | 含义 |
+|---|---|
+| `allow` | 直接执行 |
+| `deny` | 返回明确 BLOCKED，不重试原危险动作 |
+| `ask` | 需要用户审批；Feishu 场景发审批卡片并阻塞/挂起 |
 
-并补齐：
+P0 只需覆盖：
 
-- 去重
-- substring 匹配更新
-- 容量超限报错与整理建议
-- 注入扫描
+- Bash 命令危险模式。
+- 文件写入/删除路径边界。
+- Feishu 发送、群发、上传等外部副作用。
+- Cron 无人值守场景：默认 deny，除非 job policy 明确允许。
 
-### 6.4 `memory-save` 的角色调整
+审计日志建议：
 
-`memory-save` 仍然保留，但角色要变化：
-
-- 以前：让 Agent 通过 Skill 来做文件写入
-- 以后：`memory-save` 更像一层“记忆策略 Skill”，负责**判断该不该记、记什么**
-- 真正的写入由 `memory_service` 完成
-
-这样可以把“策略”和“存储”分开。
-
-### 6.5 引入 Session Search
-
-建议新增 `session_search`，不要再把“查历史”只押注在 pgvector 上。
-
-原因很简单：
-
-- `pgvector` 擅长语义近似
-- FTS5 擅长短语、关键字、精确回忆
-- 很多“上次你帮我查的那个命令/文件/错误码”更像 FTS 问题，不是 embedding 问题
-
-建议做法：
-
-1. 用 SQLite 建 session/messages/messages_fts
-2. 搜索命中后取 top-N session
-3. 截取命中附近上下文
-4. 用轻量模型做 focused summary
-5. 返回结构化结果给主 Agent
-
-### 6.6 保留 pgvector，但把职责收窄
-
-pgvector 不要删，但建议职责改成：
-
-- 跨会话语义召回
-- 相似问题归档
-- 反思/benchmark 样本挖掘
-- 技能候选发现
-
-也就是说，pgvector 应该从“唯一历史检索入口”变成“高级语义层”。
-
-### 6.7 未来预留：用户建模 Provider
-
-Honcho 的真正启发不是“接第三方服务”，而是：
-
-> 用户建模应该是一个 provider，而不是散落在主流程里的硬编码逻辑。
-
-EvoPaw 可以先不接远端服务，但架构上应预留：
-
-- `memory.provider = local | remote`
-- `recall_mode = context | tools | hybrid`
-- `write_frequency = async | turn | session`
-
-### 6.8 优先级
-
-- `P0`：本地 memory service + session_search MVP
-- `P1`：SQLite + FTS5 替换/补充 `index.json + JSONL`
-- `P2`：provider 化用户建模
-
----
-
-## 7. 改进方案三：把 Prompt / Context 工程独立成一层
-
-### 7.1 当前问题
-
-当前 EvoPaw 的 Prompt 装配逻辑主要在 `evopaw/agents/main_agent.py`：
-
-- Bootstrap prompt
-- tool constraint
-- ctx 摘要
-- conversation history
-- user message
-- image block
-
-这虽然能跑，但随着系统成长，会出现几个痛点：
-
-- system prompt 结构不可见
-- 不同 provider 很难共享
-- 子代理/cron/测试模式的 prompt 差异难管理
-- 压缩、恢复、上下文文件发现无法复用
-
-### 7.2 目标结构
-
-建议新增 `evopaw/agent_runtime/prompt_builder.py`：
-
-```text
-build_system_prompt(
-    identity,
-    agent_rules,
-    hot_memory_snapshot,
-    skills_index,
-    project_context,
-    platform_hint,
-)
-
-build_turn_overlay(
-    session_snapshot,
-    retrieved_session_context,
-    current_user_message,
-    multimodal_blocks,
-)
+```json
+{
+  "ts": "2026-04-24T00:00:00Z",
+  "session_id": "s-...",
+  "routing_key": "p2p:...",
+  "sender_id": "ou_...",
+  "actor": "sub_agent",
+  "skill_name": "scheduler_mgr",
+  "tool_name": "Bash",
+  "action": "ask",
+  "reason": "recursive delete",
+  "approved_by": null
+}
 ```
 
-### 7.3 分层原则
+### 4.3 上下文文件扫描
 
-建议采用 Hermes 式的明确分层：
-
-1. Identity（`soul.md`）
-2. Agent Rules（`agent.md`）
-3. Hot Memory（`user.md` + `memory.md`）
-4. Skills Index（精简 metadata）
-5. Project Context（`AGENTS.md` / `CLAUDE.md` / workspace hints）
-6. Platform Hint（Feishu/TestAPI）
-7. Turn Overlay（ctx/session search/当前消息）
-
-### 7.4 引入 ContextEngine 抽象
-
-新增：
-
-```text
-evopaw/context/
-├── engine.py             # ContextEngine ABC
-├── compressor.py         # 当前 maybe_compress 的系统化版本
-├── session_hygiene.py    # 进入主 Agent 前的粗粒度压缩
-├── retrieval.py          # session recall / vector recall
-└── hints.py              # 子目录上下文发现
-```
-
-接口建议至少包括：
-
-- `should_compress(history, usage) -> bool`
-- `compress(history, usage) -> CompressedHistory`
-- `retrieve(query, session_id) -> ContextPack`
-- `discover(paths) -> ContextHints`
-
-### 7.5 子目录上下文发现
-
-Hermes 的一个非常实用的能力是：随着 agent 读到子目录文件，逐步发现并注入子目录 `AGENTS.md`。
-
-EvoPaw 也可以做一个轻量版本：
-
-- 当 Skill / Agent 访问某个路径
-- 向上查找最近的 `AGENTS.md` / `CLAUDE.md`
-- 经过安全扫描后缓存注入
-
-这对复杂仓库里的局部约束非常重要。
-
-### 7.6 当前 `ctx.json` 的定位修正
-
-建议把 `ctx.json` 从“长期记忆”语义改成“会话快照”语义：
-
-- 它解决的是 session continuity
-- 不是 durable preference memory
-- 也不应被无限叠加为“伪长期记忆”
-
-必要的话可以直接重命名为 `conversation_snapshot.json`，以减少概念混乱。
-
-### 7.7 优先级
-
-- `P0`：抽出 `prompt_builder.py`
-- `P1`：ContextEngine + dual compression
-- `P2`：子目录上下文发现 + prompt caching 兼容
-
----
-
-## 8. 改进方案四：把 Skills 升级为“可治理资产”
-
-### 8.1 当前问题
-
-EvoPaw 的 SkillLoader 很不错，但现在仍然缺少 Hermes 那种“资产化治理”能力：
-
-- 没有 skill status/lifecycle
-- 没有 source/trust/version
-- 没有 candidate/quarantine
-- 没有 external skill dirs
-- 没有 update/reset/rollback
-
-### 8.2 建议元数据扩展
-
-在现有 frontmatter 上新增：
-
-```yaml
----
-name: scheduler_mgr
-description: ...
-type: task
-version: "1.1"
-category: productivity
-triggers:
-  - "定时"
-  - "提醒"
-  - "cron"
-execution_mode: isolated
-allowed_tools:
-  - Bash
-  - Read
-source:
-  kind: bundled        # bundled | local | generated | imported
-  uri: ""
-trust: internal        # internal | reviewed | generated | quarantined
-status: enabled        # draft | quarantine | canary | enabled | deprecated
-owner: system
-last_used_at: ""
-quality_score: 0.82
----
-```
-
-### 8.3 Registry 抽象
-
-建议从 `load_skills.yaml` 过渡到“manifest + runtime registry”：
-
-```text
-evopaw/skills_registry/
-├── manifest.py
-├── resolver.py
-├── lifecycle.py
-├── audit.py
-└── sources.py
-```
-
-支持多个来源：
-
-- bundled（仓库自带）
-- local（用户/工作区创建）
-- generated（学习闭环产出）
-- shared（团队共享目录）
-
-### 8.4 引入 Skill Manage
-
-新增内部服务，而不是继续只靠 `skill-creator`：
-
-- `create`
-- `patch`
-- `edit`
-- `delete`
-- `write_file`
-- `remove_file`
-
-其中：
-
-- `patch` 应该是首选更新方式
-- `edit` 只用于大重构
-- 所有 AI 生成改动默认进入 `quarantine`
-
-### 8.5 候选区与审计
-
-建议新增目录：
-
-```text
-data/skills/
-├── active/
-├── quarantine/
-├── archived/
-└── audit.log
-```
-
-这样可以做到：
-
-- 候选技能不立即暴露给主 Agent
-- 所有生成/更新/禁用都有审计轨迹
-- 出问题时可以回滚
-
-### 8.6 不建议现在就做完整 Skill Hub
-
-Hermes 的 Skills Hub 很强，但 EvoPaw 不需要一开始就做线上安装市场。
-
-更现实的路径是：
-
-- `P1`：支持 external skill dirs
-- `P2`：支持共享团队技能目录
-- `P3`：才考虑远端 registry / hub
-
-### 8.7 优先级
-
-- `P1`：metadata 扩展 + lifecycle + quarantine
-- `P2`：skill_manage + external dirs
-- `P3`：远端 registry / hub
-
----
-
-## 9. 改进方案五：补齐安全边界，停止默认放行
-
-### 9.1 当前风险点
-
-`evopaw/llm/claude_client.py` 里，主 Agent 与 Sub-Agent 都使用：
-
-```python
-permission_mode="bypassPermissions"
-```
-
-这在实验期能提高效率，但在持续运行、自动定时、会写文件、能调飞书 API 的系统里，风险非常高。
-
-### 9.2 建议的五层安全改造
-
-短期先做比 Hermes 简化但足够实用的版本：
-
-#### 第一层：危险命令审批
-
-新增 `security/approval.py`：
-
-- 命令模式匹配
-- `manual | smart | off`
-- 支持一次性通过 / 本 session 通过 / 永久 allowlist
-
-#### 第二层：执行后端分级
-
-至少区分：
-
-- `trusted_local`
-- `restricted_container`
-- `cron_restricted`
-
-不同 Skill / 任务绑定不同后端与权限模板。
-
-#### 第三层：上下文文件扫描
-
-对所有会进入 prompt 的文件执行扫描：
+Hermes 在 `prompt_builder.py`、`memory_tool.py`、`skills_guard.py` 中都对会进入 prompt 的内容做注入扫描。EvoPaw 需要把扫描前置到所有 prompt 输入：
 
 - `soul.md`
 - `user.md`
@@ -742,595 +237,847 @@ permission_mode="bypassPermissions"
 - `memory.md`
 - `AGENTS.md`
 - `CLAUDE.md`
+- Skill `SKILL.md`
+- session snapshot
+- retrieved memory/search snippets
 
-拦截：
+P0 扫描规则不必复杂，先覆盖：
 
-- “忽略之前指令”
-- 隐藏注释注入
-- 读取 `.env` / 凭证
-- curl 外发
-- 零宽字符 / bidi
+- “ignore previous instructions” 类覆盖指令。
+- hidden HTML/comment 指令。
+- 零宽字符、bidi override。
+- 读取/外发 `.env`、token、secret 的指令。
+- `curl | sh`、`wget | sh`、远端脚本执行。
 
-#### 第四层：凭证白名单透传
+发现高危内容时，应注入安全占位而不是原文。
 
-未来不应默认让所有 Skill 看到全量环境变量。
+### 4.4 Tool Result Budget
 
-建议：
+Hermes 的 registry 支持 `max_result_size_chars`，session_search 也限制 top-N、max chars、并发。EvoPaw 当前 `skill_loader` 返回 Sub-Agent 输出没有统一预算。
 
-- Skill 声明所需 secret 名称
-- runtime 按 allowlist 注入
-- 其余变量不透传
+P0 要求：
 
-#### 第五层：路径与 session 边界校验
+- 每个 Skill 增加 `output_budget_chars`，默认 12000。
+- 超限结果写入 `outputs/skill-result-*.md`，返回摘要和文件路径。
+- `history_reader`、`search_memory`、未来 `session_search` 都必须分页/限额。
+- 错误返回必须是结构化 JSON 或固定 XML envelope，不能把 traceback 无限塞回主模型。
 
-需要保证：
+建议统一结果格式：
 
-- cron job 不能越过自己的工作区
-- session A 不能读写 session B 的数据
-- `routing_key` / `session_id` / `workdir` 都经过标准化校验
+```xml
+<skill_result name="pdf" status="ok" truncated="false">
+  <summary>...</summary>
+  <artifacts>
+    <file>/workspace/sessions/s-xxx/outputs/result.md</file>
+  </artifacts>
+</skill_result>
+```
 
-### 9.3 Hermes 的经验如何取舍
+### 4.5 `ctx.json` 改为有 schema 的 session snapshot
 
-Hermes 在容器后端里会弱化危险命令审批，因为容器本身是边界。
+当前 `ctx.json` 是 list，语义容易滑向“长期记忆”。P0 应先改结构，不一定马上迁移所有存量。
 
-EvoPaw 不应直接照搬这一点。原因是：
+目标结构：
 
-- EvoPaw 有 Feishu 发送能力
-- 有 cron
-- 有持久化 workspace
-- 还有用户上传附件
+```json
+{
+  "schema_version": 1,
+  "session_id": "s-xxx",
+  "captured_at": "2026-04-24T00:00:00Z",
+  "model": "claude-sonnet-4-6",
+  "model_ctx_limit": 200000,
+  "compression_count": 1,
+  "source_range": {
+    "from_raw_offset": 0,
+    "to_raw_offset": 128
+  },
+  "messages": [
+    {"role": "system", "content": "<context_summary>...</context_summary>"}
+  ]
+}
+```
 
-即使在容器里，误删持久卷、误发消息、误改技能资产依然是实质风险。
+原则：
 
-### 9.4 优先级
-
-- `P0`：危险命令审批 + 上下文扫描
-- `P1`：凭证白名单 + 后端分级
-- `P2`：完整安全策略中心
+- snapshot 只解决 session continuity。
+- durable preference/fact 写入 `memory_service`。
+- `raw.jsonl` 或后续 SQLite 是可恢复原始历史的来源。
+- model context limit 从配置/模型元数据来，不再硬编码 32000。
 
 ---
 
-## 10. 改进方案六：重构 Session / Search / Analytics 底座
+## 5. P0：Memory 与 Session Search
 
-### 10.1 为什么 `index.json + JSONL` 不够了
+### 5.1 新增 `memory_service`
 
-当前 `SessionManager` 的优点是简单可靠，但随着 EvoPaw 进入长期运行阶段，它会成为瓶颈：
+Hermes 的 built-in memory 有几个关键点值得直接借鉴：
 
-- 无法做高质量全文检索
-- 无法做 lineage
-- 无法做统计分析
-- 不适合多进程/多实例并发
-- 难以支撑 learning loop 的数据面
+- 两个目标：`memory` 和 `user`。
+- 操作是 `add/replace/remove/read`，不是让模型自由编辑文件。
+- entries 有字符预算。
+- 写入会立即落盘，但本轮 system prompt snapshot 不变。
+- 写入前做 prompt injection/exfiltration 扫描。
 
-### 10.2 建议目标
-
-以 SQLite 为主存储，以 JSONL 为审计副本：
+EvoPaw 建议新增：
 
 ```text
-data/state.db
-├── sessions
-├── messages
-├── messages_fts
-├── tool_calls
-├── skill_events
-├── memory_events
-└── benchmarks
+evopaw/memory/
+├── service.py
+├── scanner.py
+├── quota.py
+├── store.py
+└── providers/
+    ├── local.py
+    └── base.py
 ```
 
-保留：
+`memory-save` 的角色调整为策略 Skill：
 
-- `raw.jsonl` 或 `sessions/*.jsonl` 作为 append-only 审计日志
+- 判断该不该记。
+- 生成 compact declarative facts。
+- 调用 `memory_service` 写入。
 
-### 10.3 应记录的新字段
+它不应继续成为“随意写文件”的主通道。
 
-建议在消息/会话级记录：
+### 5.2 热记忆写入规则
 
-- model/provider
-- token usage
-- tool calls count
-- elapsed ms
-- compression events
-- retrieved sessions
-- triggered skills
-- user correction markers
-- cron / normal / api / test source
+| 信息类型 | 写入位置 | 示例 |
+|---|---|---|
+| 用户偏好/纠正 | `user.md` | “用户偏好中文回复，代码标识符保持英文。” |
+| 稳定环境事实 | `memory.md` | “EvoPaw 使用 Claude Agent SDK，主工具入口是 skill_loader。” |
+| 任务进度 | 不写 hot memory | 用 session_search 回忆 |
+| 可复用流程 | Skill | “如何生成港股晨报” |
+| 大段资料 | topic/cold file | 报告、会议纪要、项目背景长文 |
 
-这样后面才能做：
+写入必须是 declarative fact，不是 imperative instruction。
+例如：
 
-- `/insights`
-- 技能成功率分析
-- 高价值样本抽取
-- 成本与延迟报表
+- 推荐：“用户偏好最终答复先给结论再给验证命令。”
+- 避免：“以后所有回答都必须先给结论。”
 
-### 10.4 新增 `session_search`
+### 5.3 新增 `session_search`
 
-建议新增模块：
+Hermes 的 `session_search` 路径是：FTS5 搜索消息 -> 按 session 聚合 -> 截取命中附近上下文 -> 辅助模型摘要。
+
+EvoPaw 建议新增：
 
 ```text
-evopaw/session_search/
-├── index.py
+evopaw/session_store/
+├── db.py
+├── writer.py
 ├── search.py
-├── summarize.py
-└── tool.py
+└── summarize.py
+
+evopaw/skills/session_search/
+└── SKILL.md
 ```
 
-默认策略：
+SQLite schema 先做 MVP：
 
-1. FTS5 搜索
-2. top-N sessions 去重
-3. 取命中上下文窗口
-4. 轻量模型生成 per-session summary
-5. 返回结构化结果
+```sql
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  routing_key TEXT NOT NULL,
+  source TEXT NOT NULL,
+  parent_session_id TEXT,
+  model TEXT,
+  started_at REAL NOT NULL,
+  ended_at REAL,
+  message_count INTEGER DEFAULT 0,
+  tool_call_count INTEGER DEFAULT 0
+);
 
-### 10.5 优先级
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT,
+  ts REAL NOT NULL,
+  tool_name TEXT,
+  metadata TEXT
+);
 
-- `P0`：state.db + FTS5 + session_search
-- `P1`：analytics 事件表
-- `P2`：insights 报表与学习数据面
+CREATE VIRTUAL TABLE messages_fts USING fts5(
+  content,
+  content=messages,
+  content_rowid=id
+);
+```
+
+保留现有 JSONL 作为 append-only audit，短期采用 dual-write，稳定后再让 SQLite 成为主读路径。
+
+### 5.4 pgvector 的职责收窄
+
+pgvector 不应删除，但职责要明确：
+
+- 语义相似召回。
+- 相似任务聚类。
+- learning loop 样本挖掘。
+- 技能候选发现。
+
+精确历史问题优先走 FTS5：
+
+- “上次那个错误码是什么？”
+- “之前提到的文件路径？”
+- “上周那个命令怎么写？”
+
+语义模糊问题再走 pgvector：
+
+- “我们之前做过类似的 Feishu 附件处理吗？”
+- “有没有类似的投资报告工作流？”
 
 ---
 
-## 11. 改进方案七：把 Cron 从“消息回灌”升级为第一类任务运行时
+## 6. P0/P1：Prompt Builder 与 ContextEngine
 
-### 11.1 当前问题
+### 6.1 抽出 Prompt Builder
 
-`CronService` 当前的核心动作是：
+当前 `main_agent.py` 同时负责 bootstrap prompt、tool constraints、ctx summary、history、image block、SkillLoader server、Claude SDK options 和 persistence。建议新增：
 
-- 构造 `InboundMessage`
-- 交给 `Runner.dispatch()`
+```text
+evopaw/agent_runtime/
+├── prompt_builder.py
+├── turn_overlay.py
+└── platform_hints.py
+```
 
-它非常轻，但会带来上下文污染与治理问题。
+接口：
 
-### 11.2 目标模型
+```python
+def build_stable_system_prompt(
+    *,
+    workspace_dir: Path,
+    skills_index: str,
+    platform: str,
+    model_family: str,
+) -> str: ...
 
-建议新增 `CronAgentRunner`：
+def build_turn_overlay(
+    *,
+    session_snapshot: dict | None,
+    recent_history: list[MessageEntry],
+    retrieved_context: list[dict],
+    user_message: str,
+) -> str: ...
+```
+
+分层建议：
+
+1. Identity：`soul.md`
+2. Agent rules：`agent.md`
+3. Hot memory snapshot：`user.md` + `memory.md`
+4. Skills index：只包含可见 Skill 的紧凑 metadata
+5. Project context：`AGENTS.md` / `CLAUDE.md`
+6. Platform hint：Feishu/TestAPI/Cron
+7. Tool-use constraints
+8. Turn overlay：session snapshot、recent history、retrieved context、本轮输入
+
+### 6.2 稳定层与临时层分离
+
+Hermes 的重要经验是：system prompt 尽量稳定，memory mid-session 写入不改变当前 snapshot。这有两个收益：
+
+- 降低 prompt cache 失效。
+- 避免“刚写入的记忆立即变成更高优先级指令”。
+
+EvoPaw 可先这样落地：
+
+- 每个 Runner worker/session 启动时生成 `stable_system_prompt`。
+- 本轮 `ctx_summary/recent_history/retrieved_context/user_message` 放入 user prompt overlay。
+- `memory_service.add()` 的结果只在工具响应中可见，下一轮再进 stable snapshot。
+
+如果 Claude Agent SDK 的调用模型不利于跨轮缓存，也仍应保持概念分离，方便未来多 provider。
+
+### 6.3 ContextEngine 抽象
+
+`context_mgmt.py` 当前有剪枝、分块、压缩三类函数。建议升级为：
+
+```text
+evopaw/context/
+├── engine.py
+├── compressor.py
+├── budget.py
+├── retrieval.py
+└── subdirectory_hints.py
+```
+
+接口：
+
+```python
+class ContextEngine:
+    def update_from_response(self, usage: dict) -> None: ...
+    def should_compress(self, messages: list[dict]) -> bool: ...
+    def compress(self, messages: list[dict], focus_topic: str | None = None) -> list[dict]: ...
+    def retrieve(self, query: str, session_id: str) -> list[dict]: ...
+```
+
+P1 才需要完整 token-aware；P0 可以先把硬编码参数移到 config：
+
+- `context.model_ctx_limit`
+- `context.compress_threshold`
+- `context.protect_first_n`
+- `context.protect_last_n`
+- `context.chunk_tokens`
+
+### 6.4 子目录上下文发现
+
+Hermes 的 `SubdirectoryHintTracker` 不改 system prompt，而是在工具结果中追加局部上下文。EvoPaw 可做轻量版本：
+
+- 当 Main/Sub-Agent 访问某路径，检查该路径及最多 5 级父目录。
+- 识别 `AGENTS.md`、`CLAUDE.md`、`.cursorrules`。
+- 经过 context scanner。
+- 限制每文件 8000 字符。
+- 只注入一次，缓存已加载目录。
+
+这对 EvoPaw 处理用户上传项目、复杂仓库文档、Skill 脚本调试都有价值。
+
+---
+
+## 7. P1：Skill 供应链与 Tool Registry
+
+### 7.1 Skill metadata 收敛到 SKILL.md frontmatter
+
+`load_skills.yaml` 应只承担 enable/order/source manifest，不再是 Skill 类型和路径的唯一来源。
+
+建议 frontmatter：
+
+```yaml
+---
+name: scheduler_mgr
+description: 管理 EvoPaw 定时任务，支持 at/every/cron。
+type: task
+version: "1.1.0"
+category: productivity
+execution_mode: isolated
+source:
+  kind: bundled
+  uri: ""
+trust: internal
+status: enabled
+allowed_tools:
+  - Read
+  - Write
+  - Bash
+allowed_paths:
+  read:
+    - /workspace/sessions/{session_id}
+    - /mnt/skills/scheduler_mgr
+  write:
+    - /workspace/sessions/{session_id}/outputs
+    - /workspace/sessions/{session_id}/tmp
+output_budget_chars: 12000
+needs_context: false
+safety:
+  side_effects: true
+  requires_approval_for:
+    - write_cron
+    - delete_cron
+---
+```
+
+Registry 构建规则：
+
+- `SKILL.md` frontmatter 是 metadata source of truth。
+- `load_skills.yaml` 只决定哪些 bundled/local skill 启用和排序。
+- manifest 中的 `path` 必须被尊重；若缺失则默认为 `skills/{name}`。
+- 同名 Skill 冲突时：local/generated > bundled > external，但必须审计并记录 shadow。
+
+### 7.2 `skill_manage` 服务化
+
+EvoPaw 的 `skill-creator` 已有创建和评测资产，但缺少运行时管理服务。建议新增：
+
+```text
+evopaw/skills_runtime/
+├── registry.py
+├── manager.py
+├── guard.py
+├── lifecycle.py
+├── audit.py
+└── sources.py
+```
+
+支持操作：
+
+- `create`
+- `patch`
+- `edit`
+- `delete`
+- `write_file`
+- `remove_file`
+- `promote`
+- `rollback`
+
+Hermes 的经验是：`patch` 应是默认修复路径，`edit` 只用于大改。EvoPaw 也应避免每次修 Skill 都全量重写 `SKILL.md`。
+
+### 7.3 候选区与生命周期
+
+目录结构：
+
+```text
+data/skills/
+├── active/
+├── quarantine/
+├── canary/
+├── archived/
+└── audit.jsonl
+```
+
+生命周期：
+
+| 状态 | 可见性 | 进入条件 |
+|---|---|---|
+| `draft` | 不可见 | 反思/用户请求生成 |
+| `quarantine` | 不可见 | 已落盘，等待扫描/评测 |
+| `canary` | 部分 routing_key 可见 | 扫描通过，评测通过 |
+| `enabled` | 全局可见 | 人工或策略批准 |
+| `deprecated` | 可见但不优先 | 有替代方案 |
+| `retired` | 不可见 | 归档 |
+
+### 7.4 Skill Guard
+
+在支持 external skill dirs、团队共享目录或自动生成 Skill 前，必须先做 Skill Guard：
+
+- 扫描 prompt injection。
+- 扫描环境变量/secret 外发。
+- 扫描远端下载执行。
+- 扫描 path traversal、symlink escape。
+- 扫描二进制/大文件/过多文件。
+- 按 source/trust/verdict 决策。
+
+没有 Guard 之前，不建议做公开 Skill Hub。
+
+### 7.5 内部 Tool Registry
+
+即使 Main Agent 仍只暴露 `skill_loader`，Skill Runtime 内部也应借鉴 Hermes 的 registry：
+
+```text
+evopaw/runtime/
+├── tool_registry.py
+├── toolsets.py
+├── result_budget.py
+└── dispatch.py
+```
+
+每个工具条目包含：
+
+- name
+- toolset
+- schema
+- handler
+- check_fn
+- required_secrets
+- max_result_size_chars
+- side_effect_level
+
+这能解决：
+
+- Skill 脚本能力难以审计。
+- Sub-Agent allowed_tools 过粗。
+- Feishu、文件、搜索、记忆、cron 等副作用没有统一入口。
+
+---
+
+## 8. P1：Cron 任务运行时
+
+### 8.1 从消息回灌升级为 Agent Task
+
+当前 CronService：
+
+```text
+cron tick -> InboundMessage(is_cron=True) -> Runner.dispatch()
+```
+
+目标：
 
 ```text
 cron tick
   -> create fresh task session
-  -> load attached skills / tool policy
+  -> load job prompt + attached skills + tool policy
   -> run isolated agent turn
-  -> persist cron result
+  -> persist result and audit
   -> deliver to target
 ```
 
-### 11.3 任务对象升级
+建议新增：
 
-任务定义里建议新增：
+```text
+evopaw/cron/
+├── agent_runner.py
+├── policy.py
+├── delivery.py
+└── store.py
+```
 
-- attached skills
-- tool policy
-- delivery target
-- workspace/profile
-- timeout
-- retry policy
-- no-recursive-schedule
+### 8.2 任务定义升级
 
-例如：
+建议 `tasks.json` 升级为：
 
 ```json
 {
   "id": "job-001",
   "name": "daily-summary",
-  "schedule": {"kind": "cron", "expr": "0 9 * * 1-5", "tz": "Asia/Shanghai"},
+  "enabled": true,
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 9 * * 1-5",
+    "tz": "Asia/Shanghai"
+  },
   "task": {
     "prompt": "请生成昨天工作摘要并发给我",
-    "skills": ["daily-summary", "search_memory"],
+    "fresh_session": true,
+    "skills": ["daily-summary", "session_search"],
     "tool_policy": "cron_restricted",
-    "fresh_session": true
+    "timeout_seconds": 600,
+    "no_recursive_schedule": true
   },
   "delivery": {
-    "kind": "origin"
+    "kind": "origin",
+    "routing_key": "p2p:ou_xxx"
+  },
+  "state": {
+    "next_run_at_ms": 0,
+    "last_run_at_ms": null,
+    "last_status": null,
+    "last_error": null
   }
 }
 ```
 
-### 11.4 递归保护
+### 8.3 cron 默认安全策略
 
-Hermes 这里有一个很值得直接借鉴的点：
+Hermes cron 对无人值守审批有明确处理。EvoPaw 应默认：
 
-> cron-run sessions 不能再创建 cron job。
-
-EvoPaw 也应该加同样约束，否则长期运行后很容易出现定时任务自繁殖。
-
-### 11.5 优先级
-
-- `P0`：cron fresh session + no-recursive-schedule
-- `P1`：attached skills + delivery target
-- `P2`：cron analytics + retry policy
+- 无用户在线审批时，危险命令 deny。
+- cron session 禁用 `scheduler_mgr` 的创建/修改 cron 能力，防止递归调度。
+- cron tool policy 默认只允许必要 Skills。
+- cron 输出始终落审计日志，即使选择不发送。
+- 空响应不标记为成功。
 
 ---
 
-## 12. 改进方案八：引入通用 Delegation 和低上下文成本执行
+## 9. P1/P2：Learning Loop
 
-### 12.1 当前状态
+### 9.1 不要先做全自动自进化
 
-EvoPaw 现在的“多 Agent”主要体现在：
+Hermes 的闭环学习建立在 memory、session_search、skill_manage、skills_guard、state.db 之上。EvoPaw 应按下面顺序接入：
 
-- task 型 Skill -> Sub-Agent
+1. 反思日志：记录“可能值得记忆/技能化”的候选，不自动改资产。
+2. Candidate Store：候选 memory、candidate skill、skill patch 分开保存。
+3. 离线评测：复用 `skill-creator` 的 `run_eval.py` / `run_loop.py`。
+4. Quarantine：评测通过后仍不直接启用。
+5. Canary：只对指定 routing_key 或 test profile 可见。
+6. Promote：人工确认或稳定策略后启用。
 
-这已经比单代理强很多，但还不是 Hermes 那种通用 delegation/runtime：
-
-- 没有 generic `delegate_task`
-- 没有并行 workstream 概念
-- 没有类似 `execute_code` 的低上下文成本工具编排
-
-### 12.2 两个方向都值得做
-
-#### 方向 A：通用 Delegation
-
-新增：
+### 9.2 Learning 子系统
 
 ```text
-delegate_task(
-  goal,
-  context,
-  tool_policy,
-  max_parallel=3,
-)
+evopaw/learning/
+├── reflection.py
+├── triggers.py
+├── candidate_store.py
+├── evaluator.py
+├── promotion.py
+├── telemetry.py
+└── reports.py
 ```
 
-适用于：
+触发条件建议：
 
-- 并行研究
-- 复杂调试
-- 代码审查
-- 对话不想被中间过程污染的任务
+- 单任务发生 5 次以上有效工具调用且最终成功。
+- 用户纠正过流程。
+- 7 天内重复出现同类任务。
+- 某 Skill 连续失败后用户/模型找到替代路径。
+- session_search 多次召回同一流程。
 
-#### 方向 B：Workflow/Code Execution Runtime
+### 9.3 候选类型
 
-Hermes 的 `execute_code` 很值得借鉴：让 Agent 生成一个 Python 脚本，通过 RPC 调工具，只把最终 `print()` 返回给模型。
+| 候选 | 来源 | 处理 |
+|---|---|---|
+| memory candidate | 用户偏好、稳定事实 | 进入 memory review，可自动建议，不直接写入 |
+| skill candidate | 成功复杂流程 | 进入 quarantine，跑 eval |
+| skill patch | 使用中发现缺口 | patch diff，跑 targeted eval |
+| prompt rule candidate | 重复系统性错误 | 只进入人工 review，不自动改 `agent.md` |
+| test/benchmark candidate | 失败样本 | 加入 skill-creator benchmark |
 
-对 EvoPaw 的现实意义非常大，尤其适合：
+### 9.4 必须记录 telemetry
 
-- 搜索 -> 抓取 -> 过滤 -> 汇总
-- 表格/PDF/文档批处理
-- 投研报告流水线
-- cron 批任务
+没有 telemetry，就无法判断 Skill 是否真的变好。
 
-### 12.3 对 EvoPaw 的建议形态
+建议记录：
 
-不必完全复刻 Hermes 的 Unix socket RPC，可以先做简化版：
-
-```text
-evopaw/workflow_runtime/
-├── stub.py
-├── executor.py
-├── rpc_bridge.py
-└── policies.py
-```
-
-第一期只支持：
-
-- `read_file`
-- `write_file`
-- `search_memory`
-- `web_browse`
-- `tavily_search`
-- `arxiv_search`
-- `feishu_ops` 的安全子集
-
-### 12.4 子代理上下文契约
-
-Hermes 一个特别重要的原则是：
-
-> Subagents know nothing.
-
-EvoPaw 也应该把这条显式写进 delegation runtime：
-
-- 子代理默认不继承父上下文
-- 所有必要背景必须通过 `goal/context` 明确传入
-- 避免“主代理以为子代理知道，子代理其实不知道”的隐性错误
-
-### 12.5 优先级
-
-- `P1`：generic delegation
-- `P2`：workflow/code execution runtime
+- skill_invocation_id
+- skill_name/version
+- status
+- elapsed_ms
+- tool_count
+- output_truncated
+- user_correction_after_use
+- retry_count
+- produced_artifacts
+- approval_events
 
 ---
 
-## 13. 改进方案九：从 Feishu 专用管道演进到 Gateway Core
+## 10. P2/P3：Provider Runtime、Gateway、Delegation
 
-### 13.1 不是为了支持 18 个平台，而是为了降低耦合
+### 10.1 Provider Runtime
 
-Hermes 支持很多平台，但 EvoPaw 不必盲目追求“渠道数量”。
+EvoPaw 当前模型配置分散：
 
-真正值得学的是它的分层：
+- 主 Agent：Claude Sonnet。
+- Sub-Agent：Claude Haiku。
+- 压缩/embedding：Qwen/OpenAI 兼容。
 
-- gateway core
-- platform adapters
-- delivery path
-- hooks
-- status/locks
-
-### 13.2 建议重构方向
-
-```text
-evopaw/
-├── gateway/
-│   ├── core.py
-│   ├── events.py
-│   ├── session_keys.py
-│   ├── delivery.py
-│   ├── hooks.py
-│   └── adapters/
-│       ├── feishu.py
-│       └── test_api.py
-```
-
-然后把现有：
-
-- `feishu/listener.py`
-- `feishu/sender.py`
-- `api/test_server.py`
-
-逐步适配到这个模型里。
-
-### 13.3 引入 Hook System
-
-当前只有 verbose hooks。建议扩展为：
-
-- `on_message_received`
-- `on_session_loaded`
-- `on_agent_started`
-- `on_tool_started`
-- `on_tool_finished`
-- `on_memory_flushed`
-- `on_cron_fired`
-- `on_delivery_complete`
-- `on_skill_candidate_created`
-
-这样以后接：
-
-- 审计
-- 指标
-- A/B 实验
-- 学习闭环
-
-都会容易很多。
-
-### 13.4 Profile / Workspace 隔离
-
-Hermes 的 profile 概念也很值得吸收。
-
-EvoPaw 可以做一个更轻版本：
-
-- 每个 bot persona / 租户 / workspace 有自己独立的：
-  - config
-  - memory
-  - skills
-  - sessions
-  - cron
-
-这样以后无论是多客户部署还是多人格助手，都会更清晰。
-
-### 13.5 优先级
-
-- `P1`：gateway core + adapter interface
-- `P2`：hook system + profile/workspace isolation
-
----
-
-## 14. 改进方案十：建立 Provider Runtime 和辅助模型路由
-
-### 14.1 当前状态
-
-EvoPaw 当前是：
-
-- 主模型：Claude Sonnet
-- Sub-Agent：Claude Haiku
-- 辅助任务：Qwen（压缩、embedding）
-
-这个组合能工作，但配置面比较散：
-
-- 主对话模型在 `claude_client.py`
-- 压缩和 embedding 走 DashScope OpenAI 兼容接口
-- fallback、auxiliary、different task routing 还没有统一抽象
-
-### 14.2 建议方向
-
-新增 `provider_runtime/`：
+建议新增：
 
 ```text
 evopaw/provider_runtime/
 ├── resolve.py
 ├── models.py
-├── fallback.py
 ├── auxiliary.py
-└── metadata.py
+├── fallback.py
+└── credentials.py
 ```
 
-统一管理：
-
-- main model
-- subagent model
-- compression model
-- session_search summarizer
-- embedding model
-- fallback model
-
-### 14.3 为什么这很重要
-
-因为后面很多能力都依赖它：
-
-- prompt caching
-- fallback
-- auxiliary task routing
-- session search summarization
-- benchmark grading
-- 安全审批里的 smart mode
-
-### 14.4 现实建议
-
-短期不要追 Hermes 那样的“18+ providers 全家桶”，只做：
+短期只支持：
 
 - `anthropic`
-- `openai-compatible`
+- `openai_compatible`
 - `dashscope`
 - `fallback`
 
-先把抽象打平，再扩展 provider 数量。
+不要追 Hermes 的大量 provider，先把 main/subagent/compression/session_search/eval 的模型路由统一。
 
-### 14.5 优先级
+### 10.2 Gateway Core
 
-- `P1`：provider runtime 抽象
-- `P2`：fallback + auxiliary model policy
+EvoPaw 不需要马上做 Telegram/Discord/Slack，但需要降低 Feishu 耦合：
 
----
+```text
+evopaw/gateway/
+├── events.py
+├── core.py
+├── delivery.py
+├── session_keys.py
+├── approvals.py
+└── adapters/
+    ├── feishu.py
+    └── test_api.py
+```
 
-## 15. 建议的实施路线图
+这样可以把 Feishu listener/sender、TestAPI、cron delivery、approval cards、verbose/progress events 统一到 gateway event/delivery 抽象。
 
-### Phase 0：先补底线，别再裸奔
+### 10.3 Delegation 与 Workflow Runtime
 
-目标：把长期运行最危险的缺口堵上。
+Hermes 的 delegation/code execution 很强，但 EvoPaw 不应在 P0/P1 做通用并行代理。
 
-- 实现 `memory_service`，补齐 `memory-save` 写入闭环
-- 引入 `session_search` MVP（SQLite + FTS5）
-- 抽出 `prompt_builder.py`
-- 去掉默认 `bypassPermissions`，加入危险命令审批
-- 对 Bootstrap / Context 文件做注入扫描
-- 把 cron 改成 fresh session，并禁止递归调度
+先满足：
 
-### Phase 1：把运行时做成平台
+- task Skill 的 Sub-Agent 有明确输入输出和权限。
+- session_search/memory/tool registry 已稳定。
+- SkillResult envelope 已稳定。
 
-目标：让 EvoPaw 从“可用项目”升级为“可演化平台”。
+之后再考虑：
 
-- `state.db` 替换/补充 `index.json + JSONL`
-- 引入 `ContextEngine`
-- Skill metadata 扩展
-- 加入 Skill lifecycle / quarantine
-- 抽象 gateway core + Feishu/TestAPI adapters
-- provider runtime 抽象
+```text
+delegate_task(goal, context, tool_policy, max_parallel=3)
+```
 
-### Phase 2：把闭环学习接上
+以及低上下文成本 workflow runtime：
 
-目标：真正开始自我进化，而不是停留在“可手工进化”。
+```text
+evopaw/workflow_runtime/
+├── executor.py
+├── rpc_bridge.py
+├── tools.py
+└── policies.py
+```
 
-- 任务反思与候选生成
-- 对接 `skill-creator` 现有 eval/benchmark 资产
-- Skill canary / promote / rollback
-- 记录 skill telemetry 和 user correction
-- 建立 `/insights` 或管理报表
+适用场景：
 
-### Phase 3：可选高级能力
-
-目标：扩展成更强的 Agent Runtime。
-
-- generic delegation
-- workflow/code execution runtime
-- external skill dirs
-- remote memory provider
-- profile/workspace isolation
-- 远端 skill registry / team skill repo
-
----
-
-## 16. 哪些 Hermes 能力不建议现在照搬
-
-### 16.1 不建议照搬 Hermes 的“大一体式主循环文件”
-
-Hermes 的 `run_agent.py` 很强，但也非常大。
-
-EvoPaw 当前模块化程度比 Hermes 更健康。应该学习其设计原则，不要学习其文件体量。
-
-### 16.2 不建议马上追多平台
-
-Hermes 的多平台是成熟阶段能力。
-
-EvoPaw 当前更重要的是先把 Feishu 场景里的：
-
-- 安全
-- 记忆
-- 检索
-- 技能演化
-- cron 隔离
-
-做好。
-
-### 16.3 不建议过早接远端用户建模服务
-
-Honcho 很有启发，但会带来：
-
-- 数据治理
-- 隐私
-- 额外依赖
-- 网络稳定性
-
-EvoPaw 应先把本地 provider 接口与 recall_mode 设计好，再决定是否接远端服务。
-
-### 16.4 不建议先做公开 Skill Hub
-
-在没有 quarantine、trust level、audit 之前，公开安装第三方 Skill 风险过高。
-
-顺序应该是：
-
-1. 本地生命周期治理
-2. 团队共享目录
-3. 再考虑远端 registry
+- 搜索 -> 抓取 -> 过滤 -> 汇总。
+- 表格/PDF 批处理。
+- 投研报告流水线。
+- cron 批任务。
 
 ---
 
-## 17. 我建议优先落实的十个具体动作
+## 11. 重新排序后的实施路线图
 
-如果只选最关键的十项，我建议按这个顺序做：
+### Phase 0：运行时底线
 
-1. 新增 `memory_service`，补齐 `memory-save` 的真实执行闭环。
-2. 把 `ctx.json` 明确定义为 session snapshot，而非长期记忆。
-3. 用 SQLite + FTS5 建 `session_search`，不要只依赖 pgvector。
-4. 把 `prompt_builder.py` 独立出来，形成稳定 prompt 层。
-5. 去掉默认 `bypassPermissions`，引入危险命令审批。
-6. 对 `soul/user/agent/memory/AGENTS/CLAUDE` 做 prompt injection 扫描。
-7. 给 Skill 增加 lifecycle/source/trust/status 元数据。
-8. 把 cron 任务改为 fresh session，禁止递归创建 cron。
-9. 把 `skill-creator` 里的 eval/benchmark 资产接入运行时反思闭环。
-10. 提前抽出 gateway core，哪怕短期仍只有 Feishu 和 TestAPI 两个 adapter。
+目标：让系统具备长期运行的最低安全和恢复能力。
+
+- 修正 Sub-Agent cwd 为 session 目录。
+- Skill metadata 增加 `allowed_tools/output_budget/status/trust/source`。
+- 移除生产默认 `bypassPermissions`，引入 PermissionGate。
+- 增加危险命令、路径、context 文件扫描。
+- 建立 `memory_service`，让 `memory-save` 走服务写入。
+- 抽出 `prompt_builder.py`，分离 stable prompt 与 turn overlay。
+- `ctx.json` 改为 schema 化 session snapshot。
+- 建立 `state.db + FTS5 session_search` MVP。
+- Cron 改为 fresh session，并禁止递归创建 cron。
+
+### Phase 1：运行时平台化
+
+目标：把能力从“散落实现”变成可治理运行时。
+
+- Skill registry 尊重 frontmatter 与 manifest，消除双源漂移。
+- 建立 Skill lifecycle/quarantine/audit。
+- 增加内部 ToolRegistry/toolsets/result budget。
+- ContextEngine 替代硬编码 `context_mgmt.py` 策略。
+- 子目录上下文发现。
+- CronAgentRunner 支持 attached skills/tool policy/delivery。
+- SQLite 记录 tool_calls、skill_events、memory_events、approval_events。
+
+### Phase 2：学习闭环
+
+目标：让 EvoPaw 能在受控流程中沉淀经验。
+
+- 建立 reflection triggers。
+- CandidateStore 保存 memory/skill/patch/prompt-rule 候选。
+- 对接 `skill-creator` eval/benchmark。
+- canary/promote/rollback。
+- `/insights` 或管理报表展示 Skill 成功率、用户纠正、成本和延迟。
+
+### Phase 3：高级扩展
+
+目标：按需求扩展，而不是提前复杂化。
+
+- ProviderRuntime + fallback/auxiliary model routing。
+- Gateway Core + Feishu/TestAPI adapters。
+- profile/workspace isolation。
+- external skill dirs/team skill repo。
+- generic delegation。
+- workflow/code execution runtime。
+- remote memory provider。
 
 ---
 
-## 18. 参考资料
+## 12. 关键文件变更清单
 
-以下资料用于形成本方案，建议后续实现时按此顺序深入：
+### 12.1 P0 必改
 
-- [Hermes Agent GitHub README](https://github.com/NousResearch/hermes-agent)
-- [Hermes Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture/)
-- [Hermes Prompt Assembly](https://hermes-agent.nousresearch.com/docs/developer-guide/prompt-assembly)
-- [Hermes Context Compression and Caching](https://hermes-agent.nousresearch.com/docs/developer-guide/context-compression-and-caching)
-- [Hermes Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
-- [Hermes Persistent Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/)
-- [Hermes Sessions / session_search](https://hermes-agent.nousresearch.com/docs/user-guide/sessions)
-- [Hermes Security](https://hermes-agent.nousresearch.com/docs/user-guide/security/)
-- [Hermes Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools/)
-- [Hermes Subagent Delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/)
-- [Hermes Code Execution](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution/)
-- [Hermes Cron](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron/)
-- [Hermes Honcho Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/honcho/)
-- [Hermes Provider Runtime](https://hermes-agent.nousresearch.com/docs/developer-guide/provider-runtime/)
+| 文件 | 动作 |
+|---|---|
+| `evopaw/tools/skill_loader.py` | 修正 Sub-Agent cwd；读取更多 frontmatter；加 output budget；尊重 `path` |
+| `evopaw/llm/claude_client.py` | 参数化 permission_mode/allowed_tools；去掉生产默认 bypass |
+| `evopaw/agents/main_agent.py` | 抽离 prompt/session/context 逻辑，调用 `prompt_builder` |
+| `evopaw/memory/bootstrap.py` | 接入 context scanner；热记忆 snapshot 化 |
+| `evopaw/memory/context_mgmt.py` | 改为 schema snapshot；移除硬编码 model ctx limit |
+| `evopaw/cron/service.py` | fresh session、no-recursive-schedule、cron policy |
+| `evopaw/skills/load_skills.yaml` | 降级为 manifest，保留 enable/order/source |
 
-EvoPaw 侧建议一起对照阅读：
+### 12.2 P0/P1 新增
 
-- [docs/harness-improvement-plan.md](./harness-improvement-plan.md)
+| 文件/目录 | 责任 |
+|---|---|
+| `evopaw/security/permission_gate.py` | ALLOW/DENY/ASK 决策 |
+| `evopaw/security/scanner.py` | context/memory/skill 注入与 exfil 扫描 |
+| `evopaw/memory/service.py` | bounded memory add/replace/remove/read |
+| `evopaw/session_store/db.py` | SQLite/WAL/FTS5 |
+| `evopaw/session_store/search.py` | session_search |
+| `evopaw/agent_runtime/prompt_builder.py` | stable prompt assembly |
+| `evopaw/context/engine.py` | ContextEngine 抽象 |
+| `evopaw/skills_runtime/registry.py` | Skill metadata/source/lifecycle |
+| `evopaw/runtime/tool_registry.py` | Skill 内部工具治理 |
+| `evopaw/cron/agent_runner.py` | first-class cron task runner |
+
+### 12.3 P2/P3 新增
+
+| 文件/目录 | 责任 |
+|---|---|
+| `evopaw/learning/` | reflection/candidates/eval/promotion |
+| `evopaw/provider_runtime/` | provider/fallback/auxiliary model routing |
+| `evopaw/gateway/` | adapter/delivery/approval/progress abstraction |
+| `evopaw/workflow_runtime/` | 低上下文成本工作流执行 |
+
+---
+
+## 13. 不建议照搬的 Hermes 能力
+
+### 13.1 不复制大一体式主循环
+
+Hermes 的主循环很成熟，但文件体量和责任集中度不适合 EvoPaw 当前架构。EvoPaw 应学习它的分工，不复制它的组织形式。
+
+### 13.2 不急着做全量多平台
+
+EvoPaw 当前价值在 Feishu 工作助手。先把 Feishu 场景里的权限、记忆、会话搜索、cron、Skill 生命周期做好，再抽象 gateway。
+
+### 13.3 不急着接远端用户建模
+
+Honcho 类 provider 很有启发，但会带来隐私、合规、网络稳定性和数据治理问题。先做好 local provider interface。
+
+### 13.4 不急着做公开 Skill Hub
+
+没有 Skill Guard、trust、quarantine、audit、rollback 前，公开安装第三方 Skill 风险大于收益。
+
+### 13.5 不把 pgvector 当唯一记忆
+
+embedding search 不是 session search。精确历史召回、命令、路径、错误码必须有 FTS5/SQLite 支撑。
+
+---
+
+## 14. 更新后的十个优先动作
+
+1. 修正 task Skill 的 Sub-Agent cwd，不再把 `/workspace` 作为默认执行目录。
+2. 为 Sub-Agent 引入 `allowed_tools` metadata，移除默认全量 Bash/Read/Write/Edit/Grep/Glob。
+3. 增加 PermissionGate，覆盖 Bash、文件写入、Feishu 副作用、cron 无人审批。
+4. 抽出 `prompt_builder.py`，把 stable system prompt 与 turn overlay 分离。
+5. 建立 bounded `memory_service`，让 `memory-save` 只做策略判断。
+6. 将 `ctx.json` schema 化，明确它是 session snapshot，不是 durable memory。
+7. 建立 SQLite/WAL/FTS5 `session_search`，JSONL 保留为审计副本。
+8. Skill frontmatter 增加 source/trust/status/allowed_tools/output_budget，并让 registry 尊重 `path`。
+9. Cron 改为 fresh task session，禁用递归调度，绑定 tool policy。
+10. 把 `skill-creator` 评测资产接入 CandidateStore，但候选 Skill 默认进 quarantine。
+
+---
+
+## 15. 参考资料
+
+Hermes Agent 上游：
+
+- [README.md](https://github.com/NousResearch/hermes-agent/blob/main/README.md)
+- [run_agent.py](https://github.com/NousResearch/hermes-agent/blob/main/run_agent.py)
+- [agent/prompt_builder.py](https://github.com/NousResearch/hermes-agent/blob/main/agent/prompt_builder.py)
+- [agent/context_engine.py](https://github.com/NousResearch/hermes-agent/blob/main/agent/context_engine.py)
+- [agent/subdirectory_hints.py](https://github.com/NousResearch/hermes-agent/blob/main/agent/subdirectory_hints.py)
+- [agent/memory_manager.py](https://github.com/NousResearch/hermes-agent/blob/main/agent/memory_manager.py)
+- [agent/memory_provider.py](https://github.com/NousResearch/hermes-agent/blob/main/agent/memory_provider.py)
+- [tools/memory_tool.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/memory_tool.py)
+- [tools/session_search_tool.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/session_search_tool.py)
+- [tools/skill_manager_tool.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/skill_manager_tool.py)
+- [tools/skills_guard.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/skills_guard.py)
+- [tools/registry.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/registry.py)
+- [tools/approval.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/approval.py)
+- [tools/path_security.py](https://github.com/NousResearch/hermes-agent/blob/main/tools/path_security.py)
+- [hermes_state.py](https://github.com/NousResearch/hermes-agent/blob/main/hermes_state.py)
+- [cron/scheduler.py](https://github.com/NousResearch/hermes-agent/blob/main/cron/scheduler.py)
+- [hermes_cli/runtime_provider.py](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/runtime_provider.py)
+- [website/docs/developer-guide/agent-loop.md](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/developer-guide/agent-loop.md)
+
+EvoPaw 对照文件：
+
+- [harness-improvement-plan.md](./harness-improvement-plan.md)
 - `evopaw/agents/main_agent.py`
 - `evopaw/tools/skill_loader.py`
+- `evopaw/llm/claude_client.py`
 - `evopaw/memory/bootstrap.py`
 - `evopaw/memory/context_mgmt.py`
 - `evopaw/memory/indexer.py`
 - `evopaw/session/manager.py`
-- `evopaw/llm/claude_client.py`
 - `evopaw/cron/service.py`
+- `evopaw/skills/load_skills.yaml`
 - `evopaw/skills/skill-creator/`
 
 ---
 
-## 19. 最终判断
+## 16. 最终判断
 
-如果说前一份 `harness-improvement-plan.md` 帮 EvoPaw 明确了“Agent Harness 应该有哪些层”，那么 Hermes Agent 给 EvoPaw 的更大启发是：
+Hermes Agent 对 EvoPaw 的真正启发是：Agent Runtime 的长期能力来自运行时纪律，而不是功能数量。
 
-> **这些层不应只是存在，而应被做成一套长期运行、持续学习、可观测、可治理、可扩展的操作系统。**
+EvoPaw 当前已经有不错的 Feishu 接入、SkillLoader、Sub-Agent、记忆雏形和评测资产。下一步最重要的不是继续堆 Skill，而是先把下面三组基础设施做实：
 
-EvoPaw 当前最值得做的，不是追 Hermes 的功能数量，而是先把 Hermes 已经验证过的三件事落到自己身上：
+1. **安全边界**：PermissionGate、路径隔离、context/skill 扫描、cron 无人审批策略。
+2. **记忆与上下文**：bounded hot memory、schema session snapshot、FTS5 session_search、ContextEngine。
+3. **Skill 资产治理**：frontmatter source of truth、lifecycle/quarantine、tool policy、eval/canary/promote。
 
-1. **热记忆 + 会话检索 + 反思闭环**
-2. **稳定 Prompt 层 + 可替换 ContextEngine**
-3. **安全边界 + Skill 生命周期治理**
-
-这三件事一旦落地，EvoPaw 才会真正具备“自我进化”的工程基础。
+这些落地后，EvoPaw 才具备安全地接入学习闭环、provider runtime、gateway core 和更强 delegation 的工程基础。

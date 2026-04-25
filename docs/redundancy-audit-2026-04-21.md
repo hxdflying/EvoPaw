@@ -1,11 +1,13 @@
 # EvoPaw 冗余审查报告（未完成项）
 
 审查日期：`2026-04-21`
-最近更新：`2026-04-24`（已完成项目已删除，仅保留未完成项）
+最近更新：`2026-04-25`（F3 已完成 / 标注每项进度状态：✅ 完成 / ❌ 不做）
 
 ---
 
-## 已完成（摘要，详情见 git log）
+## ✅ 已完成（摘要，详情见 git log）
+
+### 已 commit
 
 | 项目 | Commit |
 |---|---|
@@ -16,15 +18,25 @@
 | F8 清理工作树垃圾（`.bak` / `_compat/` / `tests/logs/`）+ 补 `.gitignore` | `448b746` |
 | 清单 #1 提交 293 处 pending 删除 | `66dfded` / `efd1dbd` / `6fd5a6d` |
 | 清单新增 首次提交 `evopaw/` 模块（之前整个目录 untracked） | `3e41040` |
+
+### 已实施，待 commit
+
+| 项目 | Commit |
+|---|---|
 | F4 接通死配置 `sub_agent_model` / `sub_agent_max_turns`（4 层穿透 + README 撤警告） | `<待 commit>` |
 | F9 第 1 项 去掉 `_build_description_xml` 的未用 `skills_dir` 参数 | `<待 commit>` |
 | F9 第 2 项 `main.py` 用 `functools.partial` 统一 Runner / test_runner 装配 | `<待 commit>` |
+| #8 子项 A `on_bot_added` 接通：`FeishuSender.send_welcome_card` + main.py 装配 + 单测 | `<待 commit>` |
+| #8 子项 B `skills_called` 接 Trace：main_agent 收集 ToolUseBlock + CaptureSender.record_skills/pop_skills + TestAPI 接入 + 单测 | `<待 commit>` |
+| F3 Office 共享资源抽取（方案 A：symlink 替换物理副本，docx 走 git rename 保留历史，pptx/xlsx 走 git rm + 新建 symlink，SKILL.md 零修改） | `<待 commit>` |
 
 ---
 
-## 未完成的 Findings
+## ⏳ 未完成的 Findings
 
-### F3. 高优先级：Office 技能资源存在三份完全重复拷贝
+### F3. ✅ 已完成 — 高优先级：Office 技能资源存在三份完全重复拷贝
+
+> ✅ **已解决（2026-04-25）**——采用方案 A（symlink 替换物理副本）。详见上方"已实施，待 commit"表。下方原始描述保留供历史参考。
 
 **判断**
 
@@ -70,9 +82,29 @@
 - Claude Code Skills 的约定是每个 Skill 自包含（SKILL.md + 脚本同目录），Sub-Agent 的 cwd 指向 session workspace 而非 skill 目录，跨目录相对引用需先验证可行性，不能直接 `import ../../_shared/office/`。
 - 三份 SKILL.md 里大量使用裸相对路径 `scripts/office/soffice.py`（docx 7 处、pptx 5 处、xlsx 1 处）。抽取后需要同步改写这些路径引用，并在 `skill_loader._build_skill_registry` 里把 `_shared` 目录排除在 registry 之外。
 
+**当前状态（2026-04-25 核实 + 完成）**
+
+- 三份 `scripts/office/` 目录 `diff -rq`（排除 `__pycache__`）**0 字节差异**，确认完全重复。
+- 各 1.4M、各 51 个文件（除 pyc 字节码）。
+- **方案选择**：方案 A（symlink 替换物理副本），未采用文档原"改 SKILL.md 路径"思路（方案 B），原因是方案 A 让 Sub-Agent 看到的路径完全不变，规避全部 4 条风险提醒（跨目录引用、SKILL.md 改写、registry 排除、相对引用 spike）。
+- **实施动作**：
+  - `git mv evopaw/skills/docx/scripts/office → evopaw/skills/_shared/office`（保留 docx 那份的 git 历史）。
+  - `git rm -r` pptx/xlsx 的 office/ 副本。
+  - 三处建符号链接 `evopaw/skills/{docx,pptx,xlsx}/scripts/office → ../../_shared/office`。
+  - SKILL.md / `pptx/editing.md` 中 11 处 `scripts/office/...` 引用 **零修改**（symlink 透明）。
+  - `_build_skill_registry` **无需改动**（manifest-driven，`_shared` 不在 `load_skills.yaml` 自动排除）。
+- **验证**：
+  - `git ls-files -s` 确认三个 symlink 为 mode `120000`、共享同一 SHA。
+  - `Path.resolve()` 三种 symlink 路径都指向 `_shared/office/...`。
+  - `python evopaw/skills/{docx,pptx,xlsx}/scripts/office/{unpack,validate,soffice}.py --help` 全部正常执行。
+  - 全量 615 单测通过。
+- **回退路径**（如需）：`rm symlink && git checkout -- evopaw/skills/{pptx,xlsx}/scripts/office && mv evopaw/skills/_shared/office evopaw/skills/docx/scripts/office`。
+
 ---
 
-### F5. 中高优先级：存在"文档和接口已承诺，但代码仍是存根"的功能点
+### F5. ✅ 已完成 — 中高优先级：存在"文档和接口已承诺，但代码仍是存根"的功能点
+
+> ✅ **已解决（见上方"已完成"表 #8 子项 A / B）**——保留下方原始描述供历史参考。
 
 **判断**
 
@@ -104,7 +136,9 @@
 
 ---
 
-### F9. 低优先级：测试文件按"基础版 / 卡片版"平行拆分
+### F9. ❌ 不做（暂缓） — 低优先级：测试文件按"基础版 / 卡片版"平行拆分
+
+> ❌ **本轮不做**：现阶段保持现状，待实际触发重复扩展时再评估。
 
 **判断**
 
@@ -132,22 +166,25 @@
 
 按风险/收益比保留排序。
 
-### #8. 功能存根状态澄清（需先决策）
+| 项目 | 状态 | 备注 |
+|---|---|---|
+| #8 子项 A `on_bot_added` | ✅ 完成（待 commit） | 已选"实现" |
+| #8 子项 B `skills_called` | ✅ 完成（待 commit） | 已选"接 Trace" |
+| F3 Office 共享资源抽取 | ✅ 完成（待 commit） | 方案 A：symlink 替换物理副本，SKILL.md 零修改 |
+| F9 测试文件合并 | ❌ 不做（暂缓） | 短期不动，待触发重复扩展时再评估 |
+
+### #8. ✅ 功能存根状态澄清
 
 对应 F5。
 
-- `on_bot_added`：删除 / 实现，二选一。
-- `skills_called`：接 Trace 取值 / 移除字段，二选一。
+- ~~`on_bot_added`：删除 / 实现，二选一。~~ ✅ 已选"实现"——`FeishuSender.send_welcome_card` 接通，main.py 装配，已补单测。
+- ~~`skills_called`：接 Trace 取值 / 移除字段，二选一。~~ ✅ 已选"接 Trace"——main_agent 在 SDK 消息流里收集 `mcp__evopaw__skill_loader` 的 `ToolUseBlock.input.skill_name`，通过 `CaptureSender.record_skills(root_id, skills)` 上报，TestAPI 用 `sender.pop_skills(msg_id)` 取值。`FeishuSender` 不实现该方法（duck-typed），生产路径零开销。
 
-### F3 Office 共享资源抽取（中风险，需单独一轮）
+### F3. ✅ Office 共享资源抽取（方案 A）
 
-对应 F3。建议与 #8 分开进行：
+对应 F3。已采用 symlink 方案，SKILL.md 零修改，规避全部 4 条文档警告。详见上方 F3 章节。
 
-- 先补共享资源回归测试
-- 先验证 Sub-Agent cwd 下跨目录相对引用的可行性
-- 再按 schemas → validators → 公共脚本 的顺序逐步抽取
-
-### F9 测试文件合并（可选，保守起见短期不动）
+### F9. ❌ 测试文件合并（暂缓，短期不动）
 
 对应现 F9。现阶段不计入必做清单，待实际触发重复扩展时再评估。
 
