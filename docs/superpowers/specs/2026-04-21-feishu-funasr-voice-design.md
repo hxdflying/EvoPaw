@@ -3,6 +3,80 @@
 > 文档版本：`2026-04-24 rev2`（切换到 Fun-ASR 实时 WebSocket API，取消 OSS 依赖）
 > 基线 commit：`1940522`（彼时 `evopaw/feishu/listener.py`、`evopaw/models.py` 已包含 audio 解析与 `duration_ms` 字段的早期试做）
 
+## 0. Implementation Status
+
+> 最后更新：`2026-04-25`（Phase 4 离线 + 半自动化部分完成），未 commit。所有改造均已在工作树中落地并通过 pytest（**605 总计**，含 6 个 WS mock 集成测试）。
+
+### 图例
+
+- ✅ 已完成并通过单测
+- 🚧 部分完成（仍有子项待办）
+- ⏳ 尚未开始
+
+### 阶段进度
+
+| 阶段 | 状态 | 主要内容 | 对应章节 |
+|------|------|----------|----------|
+| Phase 1: Basic Plumbing | ✅ 已完成 | downloader 映射修复、`evopaw/asr/*` 四文件、客户端+服务层单测 | §17.1 |
+| Phase 2: Runner Integration | ✅ 已完成 | Runner 语音分支、`语音转写+回答` 格式化、msg_id LRU 去重、main.py 注入、配置模板 | §17.2 |
+| Phase 3: Reliability | ✅ 已完成 | 分类失败文案 / 回执 / 客户端重试 / Prometheus 指标 / listener 补测 / WS mock 集成测试 | §17.3 |
+| Phase 4: Pre-Production Tuning | 🚧 离线 + 半自动化完成 | 显示配置 / 采样率审计脚本 / 阈值校准脚本 / 模型快照校验 / 4 类样例集成测试 / runbook（含 2026-04-25 检索的最新快照号清单）；只剩"真实凭证下跑生产并执行 runbook"无法本地完成 | §17.4 |
+
+### 已落地的文件
+
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `evopaw/feishu/downloader.py` | ✅ | `audio → file` 的 API type 映射已在 `download()` 中生效 |
+| `evopaw/asr/__init__.py` | ✅ | 导出 `AsrResult` / `AsrFailure` |
+| `evopaw/asr/models.py` | ✅ | `AsrResult`、`AsrFailure`（Exception 子类，frozen dataclass） |
+| `evopaw/asr/funasr_realtime_client.py` | ✅（Phase 1+3） | WebSocket one-shot 客户端 + `max_reconnect_retries` 对 `ws_connect`/`submit`/`disconnect` 整次重试 |
+| `evopaw/asr/service.py` | ✅（Phase 1+3） | 读本地音频路径 + 调用客户端 + 结构化日志 + `asr_requests_total` / `asr_latency_seconds` 埋点 |
+| `evopaw/runner.py` | ✅（Phase 2+3+4） | audio 分支、voice 模板、reply 格式化、Agent 失败保 transcript、msg_id LRU 去重、七种 reason 分类文案、`duration_ms`/`short_wait_s` 回执、`audio_messages_total`/`audio_dedup_hits_total` 埋点；Phase 4 加入 `transcription_title`/`answer_title`/`display_transcript`/`include_audio_path` 四个可覆写参数 |
+| `evopaw/main.py` | ✅（Phase 2+3+4） | `_build_speech_service` 工厂、`asr` 配置读取（含全部 Phase 2/3 字段 + Phase 4 显示字段）、`_warn_if_model_is_alias` 启动期校验、注入 Runner |
+| `evopaw/observability/metrics.py` | ✅（Phase 3） | 注册 6 个 ASR 指标 + 对应 `record_asr_*` / `record_audio_*` 辅助函数 |
+| `config.yaml.template` | ✅（Phase 2+3+4） | `asr:` 段含 §9 全部字段（含 Phase 4 的 `transcription_title`/`answer_title`/`display_transcript`/`include_audio_path`） |
+| `scripts/audit_audio_sample_rate.py` | ✅（Phase 4） | OPUS 采样率审计脚本（ffprobe 探测 + §18.2 方案 A/B 推荐） |
+| `scripts/calibrate_thresholds.py` | ✅（Phase 4） | 连本地 Prometheus 拉 `evopaw_asr_latency_seconds`，给出 `short_wait_s` / `max_wait_s` 推荐取值 |
+| `docs/runbooks/voice-pre-production.md` | ✅（Phase 4） | 预生产 runbook：四步真实联调具体命令 + 2026-04-25 检索的快照号清单 |
+| `.env.example` | ✅ | `DASHSCOPE_API_KEY` 条目早已存在 |
+
+### 已落地的单测
+
+| 文件 | 用例数 | 状态 | 对应章节 |
+|------|-------|------|----------|
+| `tests/unit/test_downloader.py` | +2（`audio→file` 映射断言、`image` 保持原值） | ✅ | §16.1.2 |
+| `tests/unit/test_funasr_realtime_client.py` | 21（17 基础 + 4 重试） | ✅ | §16.1.4 |
+| `tests/unit/test_asr_service.py` | 10（7 基础 + 3 metrics） | ✅ | §16.1.5 |
+| `tests/unit/test_runner.py` | 55（38 原有 + 5 语音 + 5 dedup + 7 分类/回执/指标 + 4 Phase 4 显示配置） | ✅ | §16.1.3 |
+| `tests/unit/test_feishu_listener.py` | +3（duration 缺失 / null 降级、audio dispatch 端到端） | ✅ | §16.1.1 |
+| `tests/unit/test_audit_audio_sample_rate.py` | 9 | ✅（Phase 4） | §17.4 步骤 A |
+| `tests/unit/test_main_asr.py` | 9 | ✅（Phase 4） | §9.1 / §17.4 步骤 C |
+| `tests/unit/test_calibrate_thresholds.py` | 17 | ✅（Phase 4 半自动化） | §17.4 步骤 B |
+| `tests/integration/test_voice_end_to_end.py` | 6（基础 happy path + task_failed + §16.3 四类样例：短/长/disconnect/timeout） | ✅ | §16.2 / §16.3 mock 部分 |
+
+全量测试：**605 通过**（Phase 1 前 496 → Phase 1 后 527 → Phase 2 后 537 → Phase 3 后 562 → Phase 4 离线 586 → Phase 4 半自动化 605）。
+
+### 下一步入口
+
+Phase 4 离线 + 半自动化部分已全部交付：
+
+- ✅ 显示配置可覆写（运营方改 yaml 即时生效）
+- ✅ §18.2 采样率审计：`python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/`
+- ✅ 阈值校准：`python3 scripts/calibrate_thresholds.py`（连本地 Prometheus 拉 P50/P80/P95）
+- ✅ 模型快照号：`config.yaml.template` 已附 2026-04-25 检索的快照清单；启动期别名告警
+- ✅ 集成测试覆盖 §16.3 四类样例的 mock 层（短卡片 / 长 ack / disconnect / timeout 文案分类）
+- ✅ 预生产 runbook（具体命令 + 验收标准）
+
+剩余工作**只能在真实飞书 app + 百炼 API Key + 真实流量下完成**：
+
+1. 跑 EvoPaw 接收真实飞书录音 ≥ 1 周
+2. 跑 `audit_audio_sample_rate.py` 决定 §18.2 方案 A/B
+3. 跑 `calibrate_thresholds.py` 取真实分位数，写回 `config.yaml`
+4. 在阿里云文档复核当时最新快照号，固定 `model:`
+5. 按 runbook 步骤 D 验收 4 类真实录音
+
+详见 [docs/runbooks/voice-pre-production.md](../../runbooks/voice-pre-production.md)。完成后把结论回写到 §0 / §9.1 / §16.3 / §17.4 / §18.2，整个 Phase 4 即可标 ✅。
+
 ## 1. Summary
 
 本设计为 EvoPaw 增加飞书语音消息处理能力，使用户可以在飞书中直接向 Bot 发送语音，由系统自动完成下载、转写、理解和回复。
@@ -342,11 +416,11 @@ Agent 返回回复后，`Runner` 统一格式化为：
 
 ### 8.1 Existing Files to Modify
 
-#### `evopaw/models.py`
+#### `evopaw/models.py` — ✅ 已完成（无改动）
 
 已存在 `Attachment.msg_type` 支持 `audio` 与 `duration_ms` 字段；本次无需结构性改动，仅补齐 docstring 与类型注释。
 
-#### `evopaw/feishu/listener.py`
+#### `evopaw/feishu/listener.py` — ✅ 已完成（基线已满足）
 
 已有 `audio` 解析逻辑，本次补齐：
 
@@ -354,7 +428,7 @@ Agent 返回回复后，`Runner` 统一格式化为：
 - 保留 `{file_key}.audio` 占位文件名
 - 保留现有文本提取、routing_key、allowed_chats 白名单逻辑
 
-#### `evopaw/feishu/downloader.py`
+#### `evopaw/feishu/downloader.py` — ✅ Phase 1 已完成
 
 **关键修正**：在 `download()` 内构造请求时，把 `audio` 映射成飞书 API 接受的 `file`：
 
@@ -369,33 +443,35 @@ req = (
 )
 ```
 
-#### `evopaw/runner.py`
+#### `evopaw/runner.py` — ✅ Phase 2+3 已完成
 
 这是本次改造的主要编排点，新增：
 
-- `speech_service` 依赖
-- `audio` 分支处理
-- 短等待与回执逻辑
-- 语音失败降级文案
-- 最终 "转写 + 回答" 回复格式化
-- **同 `msg_id` 去重**：维护最近 N 条（默认 256）已处理 `msg_id` 的滚动集合，防止飞书重投递导致对同一语音重复建立 WebSocket 连接。
+- ✅ `speech_service` 依赖（Phase 2）
+- ✅ `audio` 分支处理（Phase 2）
+- ✅ 短等待与回执逻辑（Phase 3）：`duration_ms > long_audio_threshold_ms` 立即发 ack；否则 `short_wait_s` 内拿到结果就同步回复，超时则 ack 后继续等
+- ✅ 语音失败降级文案（Phase 3）：按 `AsrFailure.reason` 映射到七种文案（§12.1-§12.5）
+- ✅ 最终 "转写 + 回答" 回复格式化（Phase 2）
+- ✅ **同 `msg_id` 去重**（Phase 2），audio 专属的 `audio_dedup_hits_total` 指标（Phase 3）
+- ✅ `audio_messages_total{status}` 四分类埋点（Phase 3）：success / asr_failed / no_service / download_failed
 
-#### `evopaw/main.py`
+#### `evopaw/main.py` — ✅ Phase 2+3 已完成
 
 新增：
 
-- `asr` 配置读取（单节，无 `oss` 段）
-- `FunASRRealtimeClient` 初始化（持有 `DASHSCOPE_API_KEY` 与 `ws_url`）
-- `SpeechRecognitionService` 初始化
-- 注入 `Runner`
+- ✅ `asr` 配置读取（单节，无 `oss` 段）（Phase 2）
+- ✅ `FunASRRealtimeClient` 初始化（持有 `DASHSCOPE_API_KEY` 与 `ws_url`）（Phase 2）
+- ✅ `SpeechRecognitionService` 初始化（Phase 2）
+- ✅ 注入 `Runner`（Phase 2）
+- ✅ 透传 `max_reconnect_retries` / `short_wait_s` / `long_audio_threshold_ms` / `ack_text`（Phase 3）
 
 ### 8.2 New Files to Add
 
-#### `evopaw/asr/__init__.py`
+#### `evopaw/asr/__init__.py` — ✅ Phase 1 已完成
 
 ASR 包入口。
 
-#### `evopaw/asr/models.py`
+#### `evopaw/asr/models.py` — ✅ Phase 1 已完成
 
 定义：
 
@@ -404,7 +480,7 @@ ASR 包入口。
 
 （本方案不存在 `AsrTaskHandle` —— WebSocket one-shot 无对外持有 task 句柄的需要。）
 
-#### `evopaw/asr/funasr_realtime_client.py`
+#### `evopaw/asr/funasr_realtime_client.py` — ✅ Phase 1 已完成
 
 职责：
 
@@ -415,7 +491,9 @@ ASR 包入口。
 5. 按 §6.3 步骤 6 聚合 `result-generated.payload.output.sentence.text`（仅 `sentence_end == true`）。
 6. 处理 `task-finished` / `task-failed` 终态与 WebSocket 异常。
 
-#### `evopaw/asr/service.py`
+> ✅ Phase 3 完成：`max_reconnect_retries` 对 `ws_connect`/`submit`/`disconnect` 三类可重试失败做整次转写重试，触发时记录 `asr_ws_reconnect_total` 指标。
+
+#### `evopaw/asr/service.py` — ✅ Phase 1 已完成
 
 高层编排：
 
@@ -432,26 +510,28 @@ ASR 包入口。
 
 ```yaml
 asr:
-  enabled: true
-  provider: "aliyun_funasr_realtime"
-  model: "fun-asr-realtime"     # 稳定别名；上线前固定为阿里云官方发布的快照号
-  ws_url: "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"
-  audio_format: "opus"          # 飞书默认；若 §18.2 判定不兼容再切
-  sample_rate: 16000            # fun-asr-realtime 要求 16kHz
-  chunk_bytes: 1024             # 每次发送字节数
-  chunk_interval_ms: 100        # 发送间隔
-  display_transcript: true
-  include_audio_path: true
-  short_wait_s: 10              # 短等待上限（触发回执的软阈值）
-  max_wait_s: 120               # 整体转写硬上限
-  submit_timeout_s: 10          # run-task → task-started 超时
-  max_reconnect_retries: 1      # 握手/连接级重试次数（整次转写失败才重试）
-  dedup_window_size: 256        # 最近 msg_id 去重窗口
-  long_audio_threshold_ms: 15000
-  ack_text: "语音已收到，正在转写和分析，请稍候。"
-  transcription_title: "语音转写"
-  answer_title: "回答"
+  enabled: true                 # ✅ Phase 2 已读并决定是否构建 service
+  provider: "aliyun_funasr_realtime"  # ✅ Phase 2
+  model: "fun-asr-realtime"     # ✅ Phase 2；稳定别名；上线前固定为阿里云官方发布的快照号
+  ws_url: "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"  # ✅ Phase 2
+  audio_format: "opus"          # ✅ Phase 2；飞书默认；若 §18.2 判定不兼容再切
+  sample_rate: 16000            # ✅ Phase 2；fun-asr-realtime 要求 16kHz
+  chunk_bytes: 1024             # ✅ Phase 2；每次发送字节数
+  chunk_interval_ms: 100        # ✅ Phase 2；发送间隔
+  display_transcript: true      # ✅ Phase 4
+  include_audio_path: true      # ✅ Phase 4
+  short_wait_s: 10              # ✅ Phase 3 回执判定
+  max_wait_s: 120               # ✅ Phase 2；整体转写硬上限
+  submit_timeout_s: 10          # ✅ Phase 2
+  max_reconnect_retries: 1      # ✅ Phase 3（客户端 transcribe() 对三类可重试 reason 循环）
+  dedup_window_size: 256        # ✅ Phase 2（在 runner 段读取）
+  long_audio_threshold_ms: 15000 # ✅ Phase 3 回执阈值
+  ack_text: "语音已收到，正在转写和分析，请稍候。"  # ✅ Phase 3
+  transcription_title: "语音转写"   # ✅ Phase 4
+  answer_title: "回答"             # ✅ Phase 4
 ```
+
+> §9 全部字段在 Phase 4 离线部分完成后已落地到 `config.yaml.template` 与 Runner 构造参数；运营方可改 yaml 即时生效。
 
 语义澄清：
 
@@ -512,13 +592,18 @@ class AsrResult:
 
 ### 10.3 AsrFailure
 
+实际落地为 `Exception` 的 frozen dataclass 子类（便于在 Runner / service 处 `raise` 与 `except AsrFailure` 统一处理）：
+
 ```python
 @dataclass(frozen=True)
-class AsrFailure:
-    reason: str                   # "download" | "ws_connect" | "submit" | "task_failed" | "timeout" | "empty"
+class AsrFailure(Exception):
+    reason: str                   # "download" | "ws_connect" | "submit" | "task_failed"
+                                  # | "timeout" | "empty" | "disconnect"
     detail: str | None = None     # 诊断信息，不进入用户回复
     task_id: str | None = None
 ```
+
+> 实现上新增 `disconnect` reason，覆盖 WebSocket 中途异常关闭 / 错误帧（§12.3），这样七种 reason 与 §15 metrics 的 `status` label 值一一对应。
 
 ## 11. Runner Semantics
 
@@ -663,18 +748,18 @@ class AsrFailure:
 
 **无**。本方案不往任何远端对象存储写入语音文件，无需远端清理 / Lifecycle 规则。
 
-## 15. Observability
+## 15. Observability — ✅ Phase 3 已完成
 
-建议新增指标：
+指标已全部注册到 `evopaw/observability/metrics.py`，并在对应模块完成埋点：
 
-- `evopaw_asr_requests_total{provider,status}` — status ∈ {success, ws_connect_fail, submit_fail, disconnect, timeout, failed, empty}
-- `evopaw_asr_latency_seconds{provider}` — 整次 one-shot 转写耗时（握手到 task-finished）
-- `evopaw_asr_timeouts_total{provider}`
-- `evopaw_asr_ws_reconnect_total{provider}` — `max_reconnect_retries` 实际触发的次数
-- `evopaw_audio_messages_total{status}`
-- `evopaw_audio_dedup_hits_total`（消息重投递去重命中）
+- ✅ `evopaw_asr_requests_total{provider,status}` — status ∈ {success, ws_connect, submit, disconnect, timeout, task_failed, empty, download}（实际 label 与 `AsrFailure.reason` 一致，比文档初稿多 `download` 分类）
+- ✅ `evopaw_asr_latency_seconds{provider}` — service 层记录整次转写耗时的 Histogram
+- ✅ `evopaw_asr_timeouts_total{provider}` — `record_asr_request(..., "timeout")` 同步递增
+- ✅ `evopaw_asr_ws_reconnect_total{provider}` — `max_reconnect_retries` 真正触发重试时 +1
+- ✅ `evopaw_audio_messages_total{status}` — status ∈ {success, asr_failed, no_service, download_failed}
+- ✅ `evopaw_audio_dedup_hits_total`（audio 消息重投递去重命中）
 
-关键日志字段：
+关键日志字段（已在 Phase 1/2 的客户端与 service 中打出 `routing_key` / `session_id` / `msg_id` / `task_id` / `asr_elapsed_ms` / `reason` / `detail`）：
 
 - `routing_key`
 - `session_id`
@@ -690,43 +775,55 @@ class AsrFailure:
 
 需要补齐以下单测：
 
-1. `tests/unit/test_feishu_listener.py`
-   - `audio` 消息识别
-   - `duration_ms` 提取（含非法值降级为 `None`）
-   - `duration` 字段缺失时 `duration_ms == None`
-2. `tests/unit/test_downloader.py`
-   - 音频下载成功：断言请求体里的 `type == "file"`（映射生效）
-   - 音频下载失败
-3. `tests/unit/test_runner.py`
-   - 短语音同步成功
-   - 长语音先回执后正式回复
-   - 转写超时 → 用户回复 + WebSocket 被关闭
-   - 转写失败 → 用户回复
-   - Agent 失败但 ASR 成功 → transcript 仍出现
-   - 重复 `msg_id` → 去重命中，不触发 WebSocket 建联
-4. `tests/unit/test_funasr_realtime_client.py`（新增文件）
-   - 握手 header 含 `Authorization: bearer xxx`
-   - `run-task` 发送结构完整，`format`/`sample_rate` 与 config 一致
-   - 收到 `task-started` 才开始推流
-   - 只保留 `sentence_end == true` 的句子进 transcript
-   - 多个 `result-generated` 按 `begin_time` 顺序拼接
-   - `task-failed` 事件抛标准化失败
-   - WebSocket 异常关闭抛标准化失败
-   - `max_wait_s` 超时主动关闭连接
-5. `tests/unit/test_asr_service.py`（新增文件）
-   - 路径传参校验
-   - 失败映射到 `AsrFailure`
+1. `tests/unit/test_feishu_listener.py` — ✅ Phase 3 已完成
+   - ✅ `audio` 消息识别（Phase 1 即有，端到端 dispatch 测试 Phase 3 新增）
+   - ✅ `duration_ms` 提取（含非法值降级为 `None`）
+   - ✅ `duration` 字段缺失 / 为 null 时 `duration_ms == None`
+2. `tests/unit/test_downloader.py` — ✅ Phase 1 已补
+   - ✅ 音频下载成功：断言请求体里的 `type == "file"`（映射生效）
+   - ✅ 音频下载失败（测试早已存在）
+3. `tests/unit/test_runner.py` — ✅ Phase 2+3 已完成
+   - ✅ 短语音同步成功（Phase 2）
+   - ✅ 长语音先回执后正式回复（Phase 3 duration 触发 + short_wait_s 触发两类）
+   - ✅ 转写超时 → 用户看到 `"语音转写超时"` 文案（Phase 3）
+   - ✅ 转写失败 → 按 reason 分类文案（Phase 3 参数化 7 种）
+   - ✅ Agent 失败但 ASR 成功 → transcript 仍出现（Phase 2）
+   - ✅ 重复 `msg_id` → 去重命中，`audio_dedup_hits_total` +1（Phase 2+3）
+4. `tests/unit/test_funasr_realtime_client.py` — ✅ Phase 1+3 已完成 21 个用例
+   - ✅ 握手 header 含 `Authorization: bearer xxx`
+   - ✅ `run-task` 发送结构完整，`format`/`sample_rate` 与 config 一致
+   - ✅ 收到 `task-started` 才开始推流
+   - ✅ 只保留 `sentence_end == true` 的句子进 transcript
+   - ✅ 多个 `result-generated` 按 `begin_time` 顺序拼接
+   - ✅ `task-failed` 事件抛标准化失败
+   - ✅ WebSocket 异常关闭抛标准化失败
+   - ✅ `max_wait_s` 超时主动关闭连接
+   - ✅ `max_reconnect_retries` 对 `ws_connect` / `disconnect` 触发重试并在第二次成功
+   - ✅ 重试耗尽沿最后一次失败抛出
+   - ✅ `task_failed` 属不可重试类型，只尝试一次
+5. `tests/unit/test_asr_service.py` — ✅ Phase 1+3 已完成 10 个用例
+   - ✅ 路径传参校验
+   - ✅ 失败映射到 `AsrFailure`
+   - ✅ 成功递增 `asr_requests_total{status="success"}` + `asr_latency_seconds`
+   - ✅ 失败递增 `asr_requests_total{status=<reason>}`（timeout / download 等）
 
-### 16.2 Integration Tests
+### 16.2 Integration Tests — ✅ Phase 3+4 已完成
 
-建议新增伪依赖集成测试：
+`tests/integration/test_voice_end_to_end.py`（6 用例）：
 
-- 启动一个本地 WebSocket mock server，按官方事件顺序下发 `task-started` → `result-generated` × N → `task-finished`
-- 注入 `audio` 消息事件
-- 断言 session 历史写入增强文本
-- 断言飞书回复格式为 "转写 + 回答"
+- ✅ 启动本地 aiohttp WebSocket mock server，按 `task-started → result-generated × N → task-finished` 顺序下发事件
+- ✅ Runner 完整链路：注入 `audio` 消息 → 下载 stub → service → client → WS mock → transcript → Agent → 回复
+- ✅ 断言最终回复以 `"语音转写："` 开头，含 transcript 和 `"回答："` 段
+- ✅ 断言 session 历史写入增强文本，且 ack 消息不进历史
+- ✅ 覆盖 §16.3 mock 可达的四类样例：
+  - 样例 1（短语音）：duration=3000ms 一卡片完成，无 ack
+  - 样例 2（长语音）：duration=20000ms 先 ack 后正式回复
+  - 样例 4 子项（损坏 / `task_failed`）：用户看到 `"语音转写失败"`
+  - 样例 4 子项（中途 disconnect）：用户看到 `"语音转写中断"`
+  - 样例 4 子项（整体超时 `max_wait_s`）：用户看到 `"语音转写超时"`
+- 真实录音质量、采样率、中英混合识别等 §16.3 内容仍需 runbook 步骤 D
 
-### 16.3 Pre-Production Verification
+### 16.3 Pre-Production Verification — ⏳ Phase 4 待实施
 
 至少覆盖 4 类真实样例，其中必须包含通过飞书客户端实际录制的真实语音样本（作为测试资产入库或 CI artifact）：
 
@@ -758,35 +855,56 @@ class AsrFailure:
 
 此阶段不接 Agent，只验证基础链路与日志。关键验证点：Fun-ASR 能对飞书真实 OPUS 样本成功转写；若不成功，走 §18.2 的降级方案判定。
 
-### Phase 2: Runner Integration
+### Phase 1: Basic Plumbing — ✅ 已完成
+
+（标题对应前述内容；Phase 1 通过的单测为 `test_funasr_realtime_client.py` 17 项 + `test_asr_service.py` 7 项 + `test_downloader.py` 2 项断言。）
+
+### Phase 2: Runner Integration — ✅ 已完成
 
 目标：
 
-- 将 transcript 组装进 `user_content`
-- 跑通正式回复
-- 完成重投递去重
+- ✅ 将 transcript 组装进 `user_content`（`evopaw/runner.py::_build_voice_message`）
+- ✅ 跑通正式回复（`_format_voice_reply` + `_VOICE_AGENT_ERROR_REPLY` 兜底）
+- ✅ 完成重投递去重（`Runner._is_duplicate_msg`，LRU 窗口 256，`is_cron` 绕过）
 
-### Phase 3: Reliability
+Phase 2 新增单测 10 项（`test_runner.py`：5 语音 + 5 dedup），总计 537 passed。
 
-目标：
-
-- 超时与失败回退
-- 回执逻辑
-- WebSocket 异常断开重试
-- 监控指标
-
-### Phase 4: Pre-Production Tuning
+### Phase 3: Reliability — ✅ 已完成
 
 目标：
 
-- 真实飞书与百炼联调
-- 基于 P50 / P95 延迟校准 `short_wait_s` 与 `long_audio_threshold_ms`
-- 调整阈值、文案和日志粒度
-- 固定 Fun-ASR 版本为上线快照号（§9.1）
+- ✅ 超时与失败回退：Runner 内按 `AsrFailure.reason` 映射到五种用户文案，覆盖 §12.1–§12.5 的全部七种 reason
+- ✅ 回执逻辑：`duration_ms > long_audio_threshold_ms` 立即发 ack；否则 `asyncio.wait_for(..., short_wait_s)` 超时后发 ack 再继续等
+- ✅ WebSocket 可重试失败的 `max_reconnect_retries` 整次转写重试（`ws_connect`/`submit`/`disconnect` 三类）；`task_failed`/`empty`/`timeout` 不重试
+- ✅ §15 全部 6 个 Prometheus 指标注册 + service/client/runner 三处埋点
+- ✅ 集成测试：`tests/integration/test_voice_end_to_end.py` 本地 aiohttp WS mock server 覆盖 happy path + task_failed
+
+Phase 3 新增单测 23 项（client 4 retry / service 3 metrics / runner 13 = 参数化 7 + ack 3 + metrics 3 / listener 2 audio dispatch & 补丁），总计 560 unit + 2 integration。
+
+### Phase 4: Pre-Production Tuning — 🚧 离线 + 半自动化完成
+
+**离线 / 半自动化（已完成 — 不需要真实凭证）**：
+
+- ✅ 显示配置可覆写：`transcription_title` / `answer_title` / `display_transcript` / `include_audio_path` 接入 Runner + config + main，4 个新单测覆盖
+- ✅ OPUS 采样率审计脚本：`scripts/audit_audio_sample_rate.py`（ffprobe 探测 + §18.2 方案 A/B 推荐），9 个离线单测
+- ✅ 阈值校准脚本：`scripts/calibrate_thresholds.py`（连本地 Prometheus 拉 P50/P80/P95，输出 `short_wait_s` / `max_wait_s` 推荐），17 个离线单测
+- ✅ 模型快照号校验：`main._warn_if_model_is_alias` 启动期检测稳定别名并 WARN，9 个单测；`config.yaml.template` 附 2026-04-25 检索的当前快照号清单
+- ✅ 集成测试 6 用例覆盖 §16.3 四类样例的 mock 可验证部分（短/长/disconnect/timeout/task_failed）
+- ✅ 预生产 runbook：`docs/runbooks/voice-pre-production.md` 把剩余真凭证联调步骤写成可执行命令
+
+**联调部分（必须在真实飞书 app + 百炼 API Key + 真实流量下进行）**：
+
+- ⏳ 跑 EvoPaw 接受真实飞书录音 ≥ 1 周
+- ⏳ §18.2：用 `audit_audio_sample_rate.py` 在真实样本上得出方案结论
+- ⏳ runbook 步骤 B：用 `calibrate_thresholds.py` 在真实流量上取分位数
+- ⏳ runbook 步骤 C：复核阿里云文档当时的最新快照号，写回 `config.yaml`
+- ⏳ §16.3 四类真实样例验收（runbook 步骤 D 给出验收矩阵）
 
 ## 18. Risks and Tradeoffs
 
-### 18.1 Session Throughput
+> 风险处置状态概览：18.1 / 18.5 / 18.6 是需接受的设计 tradeoff；18.2 仍需 Phase 4 实测；18.3 / 18.4 已在 Phase 1 按缓解方案落地。
+
+### 18.1 Session Throughput — ✅ 回执已落地（session 串行行为本身是 tradeoff）
 
 风险：
 
@@ -797,7 +915,7 @@ class AsrFailure:
 - 用回执改善用户感知
 - 二期再考虑拆后台 continuation
 
-### 18.2 Audio Format / Sample Rate Mismatch
+### 18.2 Audio Format / Sample Rate Mismatch — ⏳ Phase 4 待实测
 
 风险：
 
@@ -811,19 +929,19 @@ class AsrFailure:
   - 方案 B：在 downloader 或 asr service 里加一层 `ffmpeg -ar 16000 -f wav` 转码，代价是新增 ffmpeg 依赖与 CPU 开销。
 - 方案 A / B 选择延后到 Phase 1 实测结论出来再定，不在一期默认路径中强制引入 ffmpeg。
 
-### 18.3 Credential Scope
+### 18.3 Credential Scope — ✅ 已按缓解方案落地
 
 风险：
 
 - 若 `DASHSCOPE_API_KEY` 被 Agent 间接读取，可用于任意百炼调用
 
-缓解：
+缓解（全部已落地）：
 
-- 凭证只留在主进程环境
-- 不写入 `workspace/.config`
-- Skill / Sub-Agent 工具列表不暴露 Fun-ASR 客户端
+- ✅ 凭证只留在主进程环境（`main._build_speech_service` 从 `os.environ` 读取）
+- ✅ 不写入 `workspace/.config`（`CleanupService` 的凭证写入函数未扩展到 DashScope）
+- ✅ Skill / Sub-Agent 工具列表不暴露 Fun-ASR 客户端（`evopaw/asr/*` 未注册为 MCP 工具）
 
-### 18.4 WebSocket Half-Open Connections
+### 18.4 WebSocket Half-Open Connections — ✅ 已按缓解方案落地
 
 风险：
 
@@ -831,11 +949,11 @@ class AsrFailure:
 
 缓解：
 
-- 所有终态分支（成功 / 失败 / 超时 / 断开）强制 `ws.close()`
-- 用 `async with` 语法或 `try / finally` 保证释放
-- 监控 `evopaw_asr_ws_reconnect_total`
+- ✅ 所有终态分支（成功 / 失败 / 超时 / 断开）强制 `ws.close()`（`_transcribe_once` 的 `finally` 块）
+- ✅ 用 `try / finally` 保证释放（同上）
+- ✅ 监控 `evopaw_asr_ws_reconnect_total`（Phase 3 已注册并在 `transcribe` 重试循环中递增）
 
-### 18.5 Feishu duration Field Contract Uncertainty
+### 18.5 Feishu duration Field Contract Uncertainty — 🚧 接受的 tradeoff
 
 风险：
 
@@ -848,7 +966,7 @@ class AsrFailure:
 - 缺失时完全退回 `short_wait_s` 触发回执
 - 监控 `duration_ms is None` 的比例
 
-### 18.6 Historical Audio Path Staleness
+### 18.6 Historical Audio Path Staleness — 🚧 接受的 tradeoff
 
 风险：
 
