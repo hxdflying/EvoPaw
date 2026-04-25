@@ -56,26 +56,59 @@
 
 全量测试：**605 通过**（Phase 1 前 496 → Phase 1 后 527 → Phase 2 后 537 → Phase 3 后 562 → Phase 4 离线 586 → Phase 4 半自动化 605）。
 
-### 下一步入口
+### 收尾说明（2026-04-25）
 
-Phase 4 离线 + 半自动化部分已全部交付：
+**当前结论：本轮改造收尾，功能上线可用，剩余 7 项 polish 留作后续上量后处理。**
 
-- ✅ 显示配置可覆写（运营方改 yaml 即时生效）
-- ✅ §18.2 采样率审计：`python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/`
-- ✅ 阈值校准：`python3 scripts/calibrate_thresholds.py`（连本地 Prometheus 拉 P50/P80/P95）
-- ✅ 模型快照号：`config.yaml.template` 已附 2026-04-25 检索的快照清单；启动期别名告警
-- ✅ 集成测试覆盖 §16.3 四类样例的 mock 层（短卡片 / 长 ack / disconnect / timeout 文案分类）
-- ✅ 预生产 runbook（具体命令 + 验收标准）
+收尾时点的状态快照：
 
-剩余工作**只能在真实飞书 app + 百炼 API Key + 真实流量下完成**：
+- 4 个 commit 已 push 到 `hxdflying/EvoPaw`（`a924180` / `0148ec6` / `66256ee` / `0ee3d26`）
+- docker compose 重建完成，Phase 1-4 代码在生产容器中运行
+- **真实飞书短语音端到端验证通过**（用户已在 1:1 私聊中实测）
+- 605 unit + 6 integration 测试全绿
+- README / 设计文档 / runbook 全部同步
 
-1. 跑 EvoPaw 接收真实飞书录音 ≥ 1 周
-2. 跑 `audit_audio_sample_rate.py` 决定 §18.2 方案 A/B
-3. 跑 `calibrate_thresholds.py` 取真实分位数，写回 `config.yaml`
-4. 在阿里云文档复核当时最新快照号，固定 `model:`
-5. 按 runbook 步骤 D 验收 4 类真实录音
+### 后续待处理项（按可执行时机分组）
 
-详见 [docs/runbooks/voice-pre-production.md](../../runbooks/voice-pre-production.md)。完成后把结论回写到 §0 / §9.1 / §16.3 / §17.4 / §18.2，整个 Phase 4 即可标 ✅。
+#### 🟡 组 A：真实样本验收（10 分钟，随时可做）
+
+需要在飞书发几条真实语音、人工对照回复。代码已经在 mock 层覆盖过，这里是回补真实环境验收。
+
+| # | 验收点 | 预期结果 | 已有 mock 覆盖 |
+|---|--------|---------|----------------|
+| A1 | 20s 长语音 | 先收到 ack "语音已收到，正在转写和分析"，再收到正式回复 | ✅ `test_long_audio_sends_ack_then_final_reply` |
+| A2 | 中英混合 / 口音重 | transcript 非空，Agent 能基于内容回答 | — |
+| A3 | 重复发同一条语音 | 第二条被丢弃，`evopaw_audio_dedup_hits_total` +1 | ✅ `test_duplicate_msg_id_is_skipped` |
+| A4 | 故意触发失败（如临时改 `DASHSCOPE_API_KEY`） | 用户看到对应分类文案 | ✅ 七种 reason 各有用例 |
+
+操作：照 [docs/runbooks/voice-pre-production.md](../../runbooks/voice-pre-production.md) 步骤 D。
+
+#### 🟢 组 B：上量后才有意义的校准（≥ 1 周后）
+
+| # | 任务 | 触发条件 | 命令 |
+|---|------|---------|------|
+| B1 | §18.2 采样率审计 | 积累 ≥ 5 条真实飞书录音 | `python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/` |
+| B2 | 阈值校准 `short_wait_s` / `max_wait_s` | 积累 ≥ 50 条 ASR 请求 | `python3 scripts/calibrate_thresholds.py` |
+| B3 | 飞书 audio 时长分布统计 → `long_audio_threshold_ms` | 同上 | grep 日志中 `duration_ms` 取 P75 |
+
+#### 🔴 组 C：上线日动作
+
+| # | 任务 | 时机 |
+|---|------|------|
+| C1 | 固定 Fun-ASR 模型为官方快照号 | 正式上线发布前。当前用别名 `fun-asr-realtime` 启动会刷一行 WARN 提醒；查 [阿里云文档](https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api) 拿当时最新快照号写入 `config.yaml` 的 `model:` 字段。**不要构造推测版本号**。 |
+
+#### 完成后的回写动作
+
+每完成一项，请在本文件对应章节把 ⏳ 改 ✅：
+
+- A1-A4 验收通过 → §16.3 标 ✅、§17.4 Phase 4 整体标 ✅
+- B1 结论得出 → §18.2 标 "已实测无影响" 或 "已切方案 A/B"
+- B2/B3 写回 `config.yaml` 后 → 在本节加一行 "实际生产值：short_wait_s=X、long_audio_threshold_ms=Y"
+- C1 完成 → §9.1 末尾追加 "生产实际使用：fun-asr-realtime-YYYY-MM-DD（YYYY-MM-DD 固定）"
+
+### 下次回到本工作的入口
+
+下次想接着做飞书语音 polish 时，从这个文件 §0 收尾说明开始读，找未打 ✅ 的项即可。具体执行命令在 `docs/runbooks/voice-pre-production.md`，当前已是最新版。
 
 ## 1. Summary
 
