@@ -4,9 +4,15 @@ services:
     container_name: evopaw-main
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # OpenAI 直连凭证（providers.openai）
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Kimi / Moonshot AI 凭证（providers.kimi）
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       # Fun-ASR / 百炼凭证（§9.2 Secrets Policy：仅在主进程环境，不写入 config.yaml）
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      # memory 系列默认走 DashScope，缺此 key 时启动 warn 后降级（不阻塞主链路）
+      - QWEN_API_KEY=${QWEN_API_KEY:-}
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from evopaw.agents.hooks import build_verbose_hooks
+from evopaw.agents.hooks import CompositeStreamSink, build_verbose_hooks
 
 
 class TestBuildVerboseHooksStructure:
@@ -87,7 +87,7 @@ class TestCallbackExceptionSwallowed:
         with caplog.at_level(logging.WARNING, logger="evopaw.agents.hooks"):
             result = await hook_fn({"tool_name": "Edit"}, "id_4", {})
         assert result == {}
-        assert "verbose callback 失败" in caplog.text
+        assert "stream_sink.on_tool_use 失败" in caplog.text
 
     @pytest.mark.asyncio
     async def test_post_tool_use_swallows_exception(self, caplog):
@@ -97,4 +97,80 @@ class TestCallbackExceptionSwallowed:
         with caplog.at_level(logging.WARNING, logger="evopaw.agents.hooks"):
             result = await hook_fn({"tool_name": "Edit"}, "id_4", {})
         assert result == {}
-        assert "verbose callback 失败" in caplog.text
+        assert "stream_sink.on_tool_result 失败" in caplog.text
+
+
+# ──────────────────────────────────────────────────────────────────
+# P0-2：CompositeStreamSink
+# ──────────────────────────────────────────────────────────────────
+
+
+class _RecordingSink:
+    """记录 on_tool_use / on_tool_result 调用顺序与参数。"""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, object]] = []
+
+    async def on_tool_use(self, name: str, input_data: dict) -> None:
+        self.events.append(("use", name, input_data))
+
+    async def on_tool_result(self, name: str, output) -> None:
+        self.events.append(("result", name, output))
+
+
+class _RaisingSink:
+    """每次调用都抛错；用于验证 Composite 的错误隔离。"""
+
+    async def on_tool_use(self, name: str, input_data: dict) -> None:  # noqa: ARG002
+        raise RuntimeError("boom on_tool_use")
+
+    async def on_tool_result(self, name: str, output) -> None:  # noqa: ARG002
+        raise RuntimeError("boom on_tool_result")
+
+
+class TestCompositeStreamSink:
+    @pytest.mark.asyncio
+    async def test_empty_sinks_is_noop(self):
+        composite = CompositeStreamSink()
+        # 不应抛错
+        await composite.on_tool_use("Bash", {"a": 1})
+        await composite.on_tool_result("Bash", "out")
+
+    @pytest.mark.asyncio
+    async def test_fanout_to_all_sinks(self):
+        s1 = _RecordingSink()
+        s2 = _RecordingSink()
+        composite = CompositeStreamSink([s1, s2])
+        await composite.on_tool_use("Read", {"path": "a"})
+        await composite.on_tool_result("Read", "ok")
+        assert s1.events == [("use", "Read", {"path": "a"}), ("result", "Read", "ok")]
+        assert s2.events == [("use", "Read", {"path": "a"}), ("result", "Read", "ok")]
+
+    @pytest.mark.asyncio
+    async def test_one_sink_failure_does_not_block_others(self, caplog):
+        good = _RecordingSink()
+        bad = _RaisingSink()
+        composite = CompositeStreamSink([bad, good])
+        with caplog.at_level(logging.WARNING, logger="evopaw.agents.hooks"):
+            await composite.on_tool_use("Edit", {"x": 1})
+            await composite.on_tool_result("Edit", "y")
+        # 失败的 sink 异常被吞掉，good sink 仍收到两个事件
+        assert good.events == [("use", "Edit", {"x": 1}), ("result", "Edit", "y")]
+        assert "_RaisingSink on_tool_use 失败" in caplog.text
+        assert "_RaisingSink on_tool_result 失败" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_constructor_copies_list(self):
+        s1 = _RecordingSink()
+        sinks = [s1]
+        composite = CompositeStreamSink(sinks)
+        sinks.append(_RaisingSink())  # 之后改外部列表不应影响 composite
+        await composite.on_tool_use("X", {})
+        assert s1.events == [("use", "X", {})]
+
+    def test_satisfies_stream_sink_protocol(self):
+        """CompositeStreamSink 必须满足 runtime_checkable StreamSink 协议，
+        以便能直接传给 build_stream_sink_hooks / FeishuStreamSink 同位置。"""
+        from evopaw.agent_backends.base import StreamSink
+        composite = CompositeStreamSink()
+        assert isinstance(composite, StreamSink)

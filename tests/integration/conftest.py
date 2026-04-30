@@ -27,9 +27,24 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from evopaw.api.capture_sender import CaptureSender
 from evopaw.api.test_server import create_test_app
+from evopaw.provider_runtime import ResolvedRuntime
 from evopaw.runner import Runner
 from evopaw.session.manager import SessionManager
 from evopaw.session.models import MessageEntry
+
+
+_DEFAULT_MAIN_RUNTIME = ResolvedRuntime(
+    role="main",
+    provider_id="claude_sdk",
+    runtime_family="claude_sdk_compat",
+    model="claude-sonnet-4-6",
+)
+_DEFAULT_SUB_RUNTIME = ResolvedRuntime(
+    role="subagent",
+    provider_id="claude_sdk",
+    runtime_family="claude_sdk_compat",
+    model="claude-haiku-4-5",
+)
 
 
 # ── 日志归档 + markers 注册 ──────────────────────────────────────────────────
@@ -175,6 +190,8 @@ async def llm_client(
         sender=sender,
         workspace_dir=workspace_dir,
         ctx_dir=ctx_dir,
+        main_runtime=_DEFAULT_MAIN_RUNTIME,
+        sub_runtime=_DEFAULT_SUB_RUNTIME,
         db_dsn=db_dsn,
         max_history_turns=20,
     )
@@ -209,6 +226,8 @@ async def memory_client(
         sender=sender,
         workspace_dir=workspace_dir,
         ctx_dir=ctx_dir,
+        main_runtime=_DEFAULT_MAIN_RUNTIME,
+        sub_runtime=_DEFAULT_SUB_RUNTIME,
         db_dsn=db_dsn,
         max_history_turns=20,
     )
@@ -255,6 +274,8 @@ async def memory_client_pgvector(
         sender=sender,
         workspace_dir=workspace_dir,
         ctx_dir=ctx_dir,
+        main_runtime=_DEFAULT_MAIN_RUNTIME,
+        sub_runtime=_DEFAULT_SUB_RUNTIME,
         db_dsn=pgvector_live_dsn,
         max_history_turns=20,
     )

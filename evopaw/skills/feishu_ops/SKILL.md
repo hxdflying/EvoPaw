@@ -3,6 +3,9 @@ name: feishu_ops
 description: "飞书操作：向用户/群组发送消息（文字/富文本/图片/文件）、读取云文档/表格内容、查询群成员、管理日历事件。适合推送通知、发送处理结果文件、读取共享文档、批量发送报告等场景。"
 type: task
 version: "2.0"
+requires:
+  files:
+    - "/workspace/.config/feishu.json"
 ---
 
 # feishu_ops Skill

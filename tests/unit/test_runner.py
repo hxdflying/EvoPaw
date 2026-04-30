@@ -192,6 +192,7 @@ class TestSlashHelp:
         assert "/verbose" in reply
         assert "/help" in reply
         assert "/status" in reply
+        assert "/stop" in reply  # P1-2
 
 
 class TestSlashStatus:
@@ -205,6 +206,183 @@ class TestSlashStatus:
         _, reply, _ = await mock_sender.wait_for_message()
 
         assert "s-" in reply  # session id
+
+
+class TestSlashStop:
+    """P1-2：/stop 走 dispatch 入口快路径，不入同 routing_key 队列。"""
+
+    async def test_stop_with_no_active_handle_replies_noop(
+        self, runner, mock_sender,
+    ):
+        await runner.dispatch(make_inbound(content="/stop"))
+        _, reply, _ = await mock_sender.wait_for_message()
+        assert "没有进行中的任务" in reply
+
+    async def test_stop_does_not_create_queue_or_worker(
+        self, runner, mock_sender,
+    ):
+        await runner.dispatch(make_inbound(content="/stop"))
+        await mock_sender.wait_for_message()
+        # /stop 不入队、不创建 worker
+        assert "p2p:ou_test" not in runner._queues
+        assert "p2p:ou_test" not in runner._workers
+
+    async def test_stop_cancels_active_handle(
+        self, session_mgr, mock_sender,
+    ):
+        """慢 agent 跑到一半时 /stop 应 cancel 它，并回复'已取消'。"""
+        started = asyncio.Event()
+
+        async def slow_agent(
+            user_msg, history, sid,
+            routing_key="", root_id="", verbose=False,
+        ):
+            started.set()
+            await asyncio.sleep(60)  # 慢任务
+            return "should not reach"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=slow_agent,
+            idle_timeout=10.0,
+        )
+        try:
+            await runner.dispatch(make_inbound(content="slow", msg_id="om_1"))
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+
+            # 此刻 slow_agent 正在跑；/stop 走快路径
+            await runner.dispatch(
+                make_inbound(content="/stop", msg_id="om_2"),
+            )
+            # 第一个回复就是"已取消"（因为 slow_agent 还没完成，没回复过）
+            _, reply, _ = await mock_sender.wait_for_message(timeout=2.0)
+            assert "已取消" in reply
+        finally:
+            await runner.shutdown()
+
+    async def test_stop_not_blocked_by_same_routing_key_queue(
+        self, session_mgr, mock_sender,
+    ):
+        """关键验收：慢 agent 跑、第二条普通消息排队时，/stop 仍能立即响应。"""
+        started = asyncio.Event()
+
+        async def slow_agent(
+            user_msg, history, sid,
+            routing_key="", root_id="", verbose=False,
+        ):
+            started.set()
+            await asyncio.sleep(60)
+            return "x"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=slow_agent,
+            idle_timeout=10.0,
+        )
+        try:
+            await runner.dispatch(make_inbound(content="slow", msg_id="om_1"))
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+
+            # 第二条普通消息进入队列（被 slow_agent 阻塞）
+            await runner.dispatch(make_inbound(content="next", msg_id="om_2"))
+
+            # /stop 不应排队，应立即响应
+            t0 = asyncio.get_event_loop().time()
+            await runner.dispatch(make_inbound(content="/stop", msg_id="om_3"))
+            # 用 timeout 较短，验证快路径不阻塞
+            _, reply, _ = await mock_sender.wait_for_message(timeout=1.0)
+            elapsed = asyncio.get_event_loop().time() - t0
+
+            assert "已取消" in reply
+            assert elapsed < 1.0
+        finally:
+            await runner.shutdown()
+
+    async def test_stop_does_not_affect_other_routing_key(
+        self, session_mgr, mock_sender,
+    ):
+        """/stop p2p:u_a 不应取消 p2p:u_b 的进行中任务。"""
+        started_a = asyncio.Event()
+        started_b = asyncio.Event()
+        done_b = asyncio.Event()
+
+        async def gated_agent(
+            user_msg, history, sid,
+            routing_key="", root_id="", verbose=False,
+        ):
+            if routing_key == "p2p:ou_a":
+                started_a.set()
+                await asyncio.sleep(60)
+                return "a"
+            started_b.set()
+            await asyncio.sleep(0.05)
+            done_b.set()
+            return "b-done"
+
+        runner = Runner(
+            session_mgr=session_mgr,
+            sender=mock_sender,
+            agent_fn=gated_agent,
+            idle_timeout=10.0,
+        )
+        try:
+            await runner.dispatch(
+                make_inbound(routing_key="p2p:ou_a", content="a", msg_id="om_a")
+            )
+            await asyncio.wait_for(started_a.wait(), timeout=2.0)
+            await runner.dispatch(
+                make_inbound(routing_key="p2p:ou_b", content="b", msg_id="om_b")
+            )
+            await asyncio.wait_for(started_b.wait(), timeout=2.0)
+
+            # cancel a
+            await runner.dispatch(
+                make_inbound(
+                    routing_key="p2p:ou_a", content="/stop", msg_id="om_a_stop"
+                )
+            )
+            # b 应正常完成
+            await asyncio.wait_for(done_b.wait(), timeout=2.0)
+            # 收集所有消息，确认 b 的回复存在
+            replies = []
+            for _ in range(2):
+                _, reply, _ = await mock_sender.wait_for_message(timeout=1.0)
+                replies.append(reply)
+            # 至少包含 b-done 和"已取消"
+            assert any("b-done" in r for r in replies)
+            assert any("已取消" in r for r in replies)
+        finally:
+            await runner.shutdown()
+
+    async def test_stop_with_attachment_treated_as_normal_message(
+        self, runner, mock_sender,
+    ):
+        """带附件的消息即使内容是 /stop 也走正常队列（防止用户上传文件附带任意文本被误识别）。"""
+        from evopaw.models import Attachment
+
+        att = Attachment(msg_type="image", file_key="fk", file_name="x.jpg")
+        inbound = InboundMessage(
+            routing_key="p2p:ou_test",
+            content="/stop",
+            msg_id="om_a",
+            root_id="om_a",
+            sender_id="ou_test",
+            ts=1000000,
+            attachment=att,
+        )
+        await runner.dispatch(inbound)
+        # 应进入 agent 而非 _handle_stop（echo agent 把内容回声）
+        _, reply, _ = await mock_sender.wait_for_message(timeout=2.0)
+        assert reply.startswith("echo:")
+
+    async def test_stop_uppercase_and_whitespace_normalized(
+        self, runner, mock_sender,
+    ):
+        await runner.dispatch(make_inbound(content="  /STOP  "))
+        _, reply, _ = await mock_sender.wait_for_message()
+        assert "没有进行中的任务" in reply
 
 
 class TestSlashNotCommand:

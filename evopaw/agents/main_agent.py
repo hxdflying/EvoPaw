@@ -1,7 +1,9 @@
-"""Main Agent — 使用 Claude Agent SDK 的主 Agent 入口
+"""Main Agent — 主 Agent 入口（多 provider P2 改造后）
 
-Phase 7：集成三层记忆（Bootstrap + ctx.json + pgvector）。
-SDK 每次 query 是独立 session，历史通过 _format_history() 拼入 prompt。
+P2 之后本模块不再 import `claude_agent_sdk`：所有 LLM runtime 调用走
+`evopaw.agent_backends.get_backend(runtime).run_turn(req)`。
+
+Phase 7 集成的三层记忆（Bootstrap + ctx.json + pgvector）保持原位。
 """
 
 from __future__ import annotations
@@ -11,18 +13,23 @@ import logging
 import time
 from pathlib import Path
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    CLIConnectionError,
-    CLINotFoundError,
-    ClaudeAgentOptions,
-    ResultMessage,
-    ToolUseBlock,
-    query,
+from evopaw.agent_backends import (
+    ProviderAuthError,
+    ProviderInvalidRequest,
+    ProviderMaxTurnsExceeded,
+    ProviderRateLimited,
+    ProviderTransientError,
+    ProviderUnknownError,
+    TurnRequest,
+    get_backend,
 )
-
-from evopaw.agents.hooks import build_verbose_hooks
-from evopaw.llm.claude_client import DEFAULT_SUB_AGENT_MODEL, build_main_agent_options
+from evopaw.agents.hooks import FeishuStreamSink
+from evopaw.agents.response_finalizer import (
+    CompositeResponseFinalizer,
+    ResponseFinalizeContext,
+    ResponseFinalizer,
+)
+from evopaw.content_builders import pick_content_builder
 from evopaw.memory.bootstrap import build_bootstrap_prompt
 from evopaw.memory.context_mgmt import (
     append_session_raw,
@@ -32,10 +39,12 @@ from evopaw.memory.context_mgmt import (
 )
 from evopaw.memory.indexer import async_index_turn
 from evopaw.models import SenderProtocol
+from evopaw.provider_runtime import ResolvedRuntime
 from evopaw.runner import AgentFn
 from evopaw.session.models import MessageEntry
-from evopaw.tools.add_image_tool_local import extract_image_path, load_image_for_claude
-from evopaw.tools.skill_loader import build_skill_loader_server
+from evopaw.skills_runtime.adapters.claude_mcp import build_skill_loader_server
+from evopaw.skills_runtime.dispatcher import SkillDispatcher
+from evopaw.tools.add_image_tool_local import extract_image_path, load_image_data
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +91,18 @@ def build_agent_fn(
     sender:              SenderProtocol,
     workspace_dir:       Path,
     ctx_dir:             Path,
+    *,
+    main_runtime:        ResolvedRuntime,
+    sub_runtime:         ResolvedRuntime,
     db_dsn:              str  = "",
     max_history_turns:   int  = _DEFAULT_MAX_HISTORY_TURNS,
-    planner_model:       str  = "claude-sonnet-4-6",
     agent_max_turns:     int  = 50,
-    sub_agent_model:     str  = DEFAULT_SUB_AGENT_MODEL,
     sub_agent_max_turns: int  = 20,
+    agent_timeout_s:     float = 120.0,
+    agent_max_tokens:    int | None = None,
+    agent_temperature:   float | None = None,
+    agent_top_p:         float | None = None,
+    response_finalizer:  ResponseFinalizer | None = None,
 ) -> AgentFn:
     """工厂：返回 Runner 可用的 agent_fn 闭包。
 
@@ -95,14 +110,25 @@ def build_agent_fn(
         sender:              Feishu Sender（verbose 模式推送推理过程）
         workspace_dir:       Bootstrap 读取的 workspace 目录
         ctx_dir:             ctx.json / raw.jsonl 存储目录
+        main_runtime:        主 Agent 的 ResolvedRuntime（必填，由 resolve_runtime 产生）
+        sub_runtime:         Sub-Agent 的 ResolvedRuntime（必填）
         db_dsn:              pgvector 连接串（为空时跳过索引）
         max_history_turns:   注入 prompt 的最大历史条数
-        planner_model:       主 Agent 模型名称
         agent_max_turns:     主 Agent 最大对话轮次
-        sub_agent_model:     任务型 Skill 的 Sub-Agent 模型
         sub_agent_max_turns: Sub-Agent 最大对话轮次
+        agent_timeout_s:     HTTP backend 单次请求超时秒数（claude_sdk_compat 不消费）
+        agent_max_tokens:    通用 generation 参数；HTTP backend 消费，None=backend 默认
+        agent_temperature:   通用 generation 参数；HTTP backend 消费，None=不下发
+        agent_top_p:         通用 generation 参数；HTTP backend 消费，None=不下发
+        response_finalizer:  最终回复改写器（P0-3）；None 时使用空 Composite，
+                             等价于直接返回原 final_text。verbose 关闭时仍执行。
     """
     ctx_dir.mkdir(parents=True, exist_ok=True)
+    finalizer: ResponseFinalizer = response_finalizer or CompositeResponseFinalizer()
+
+    # Sub-Agent 模型名以 sub_runtime 为准（runner 仍然把字符串模型名透传给
+    # build_skill_loader_server / run_skill_agent，那两层在 P5/P6 才会改）。
+    effective_sub_model = sub_runtime.model
 
     async def agent_fn(
         user_message: str,
@@ -144,78 +170,193 @@ def build_agent_fn(
         text_parts.append(user_message)
         full_message = "\n\n".join(text_parts)
 
-        # 3b. 检测图片附件，构建多模态 prompt
+        # 3b. 检测图片附件 + 按 runtime_family 选 content_builder（Claude / Anthropic / OpenAI 各家形态不同）
+        # P1-3：runtime 不支持 vision 时（如通义 OpenAI 兼容端点）降级为纯文本，
+        #       附在消息末尾告知 LLM 图片存在；避免直接构建 image block 让上游 400。
+        builder = pick_content_builder(main_runtime.runtime_family)
+        image_b64: str | None = None
+        image_mime: str | None = None
         image_path = extract_image_path(user_message)
         if image_path:
-            # 将沙盒路径转换为本地路径
-            local_path = str(workspace_dir / image_path.removeprefix("/workspace/"))
-            image_block = load_image_for_claude(local_path, workspace_root=workspace_dir)
-            if image_block is not None:
-                # Claude SDK 多模态 prompt：list of content blocks
-                full_message = [
-                    {"type": "text", "text": full_message},
-                    image_block,
-                ]
+            if main_runtime.supports_vision:
+                local_path = str(workspace_dir / image_path.removeprefix("/workspace/"))
+                data = load_image_data(local_path, workspace_root=workspace_dir)
+                if data is not None:
+                    image_b64, image_mime = data
+            else:
+                logger.info(
+                    "image attachment dropped: runtime %s/%s does not support vision",
+                    main_runtime.provider_id, main_runtime.model,
+                    extra={"routing_key": routing_key, "session_id": session_id},
+                )
+                full_message += (
+                    f"\n\n[附件图片：{image_path}，当前模型不支持图像理解，"
+                    "已降级为纯文本——请基于其它上下文回答；如需识图请切换支持 vision 的 provider。]"
+                )
+        user_content: str | list[dict] = builder.build_user_content(
+            full_message, image_b64=image_b64, mime_type=image_mime,
+        )
 
         # 4. 构建 session workspace 目录
         session_cwd = workspace_dir / "sessions" / session_id
         session_cwd.mkdir(parents=True, exist_ok=True)
 
-        # 5. 构建 skill_loader MCP server（绑定当前 session）
-        skill_server = build_skill_loader_server(
-            session_id=session_id,
-            routing_key=routing_key,
-            history_all=history,
-            sub_agent_model=sub_agent_model,
-            sub_agent_max_turns=sub_agent_max_turns,
-        )
+        # 5. 按 runtime_family 准备 backend_hints：
+        #    - claude_sdk_compat:    注入 SDK MCP server（与 P2 行为一致）
+        #    - openai_chat / anthropic_messages:
+        #                            注入纯逻辑 SkillDispatcher（backend 直接 await dispatch）
+        backend_hints: dict[str, object] = {}
+        if main_runtime.runtime_family == "claude_sdk_compat":
+            skill_server = build_skill_loader_server(
+                session_id=session_id,
+                routing_key=routing_key,
+                history_all=history,
+                sub_agent_model=effective_sub_model,
+                sub_agent_max_turns=sub_agent_max_turns,
+            )
+            backend_hints = {"mcp_servers": {"evopaw": skill_server}}
+        elif main_runtime.runtime_family in ("openai_chat", "anthropic_messages"):
+            # P2-1：background 模式 task skill 完成时，把结果通过 sender 推送到当前
+            # routing_key（不回注 main agent context，避免污染对话历史）。
+            # 闭包捕获 sender / routing_key / root_id，dispatcher 自身保持纯逻辑。
+            async def _bg_result_callback(
+                task_id: str, skill_name: str, result_text: str,
+            ) -> None:
+                msg = (
+                    f"📌 后台任务 task#{task_id}（{skill_name}）已完成：\n\n"
+                    f"{result_text}"
+                )
+                try:
+                    await sender.send(routing_key, msg, root_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "background result push failed (task_id=%s, skill=%s)",
+                        task_id, skill_name,
+                        extra={"routing_key": routing_key, "session_id": session_id},
+                        exc_info=True,
+                    )
 
-        # 6. 构建 options（verbose 且非 thread 时推送飞书）
-        if verbose:
-            verbose_cb = None
-            if not routing_key.startswith("thread:"):
-                async def verbose_cb(text: str) -> None:
-                    await sender.send_text(routing_key, text, root_id)
-            hooks = build_verbose_hooks(callback=verbose_cb)
+            dispatcher = SkillDispatcher(
+                session_id=session_id,
+                routing_key=routing_key,
+                history_all=history,
+                sub_agent_model=effective_sub_model,
+                sub_agent_max_turns=sub_agent_max_turns,
+                result_callback=_bg_result_callback,
+            )
+            backend_hints = {"skill_dispatcher": dispatcher}
         else:
-            hooks = {}
-        options = build_main_agent_options(
+            raise ValueError(
+                f"未支持的 runtime_family: {main_runtime.runtime_family!r}（"
+                f"当前支持 claude_sdk_compat / openai_chat / anthropic_messages）"
+            )
+
+        # 6. verbose 模式下构建 StreamSink（thread 场景与 sub-agent 不推送）
+        stream_sink = None
+        if verbose and not routing_key.startswith("thread:"):
+            async def _send(text: str) -> None:
+                await sender.send_text(routing_key, text, root_id)
+            stream_sink = FeishuStreamSink(send=_send)
+
+        # 7. 构造 TurnRequest 调用 backend
+        req = TurnRequest(
+            role="main",
+            runtime=main_runtime,
             system_prompt=system_prompt,
+            user_content=user_content,
             cwd=str(session_cwd),
-            model=planner_model,
             max_turns=agent_max_turns,
-            hooks=hooks,
-            mcp_servers={"evopaw": skill_server},
+            timeout_s=agent_timeout_s,
+            max_tokens=agent_max_tokens,
+            temperature=agent_temperature,
+            top_p=agent_top_p,
+            stream_sink=stream_sink,
+            backend_hints=backend_hints,
         )
 
-        # 7. 调用 Claude Agent SDK
         try:
-            final_text = ""
-            skills_called: list[str] = []
-            async for message in query(prompt=full_message, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if (
-                            isinstance(block, ToolUseBlock)
-                            and block.name.endswith("skill_loader")
-                        ):
-                            skill_name = block.input.get("skill_name", "")
-                            if skill_name:
-                                skills_called.append(skill_name)
-                if isinstance(message, ResultMessage):
-                    final_text = message.result
-        except (CLINotFoundError, CLIConnectionError) as exc:
+            backend = get_backend(main_runtime)
+            result = await backend.run_turn(req)
+            final_text = result.text
+            skills_called = list(result.skills_called)
+        except ProviderAuthError as exc:
+            # 401/403：凭证错误是配置问题，不可重试，向上层暴露 provider 信息。
             logger.error(
-                "Claude SDK error: %s", exc,
+                "Backend auth error (provider=%s): %s",
+                main_runtime.provider_id, exc,
                 extra={"routing_key": routing_key, "session_id": session_id},
             )
-            return f"⚠️ Claude 调用失败：{exc}"
+            return (
+                f"⚠️ {main_runtime.provider_id} 凭证无效或未授权，请联系管理员检查 API Key。"
+            )
+        except ProviderRateLimited as exc:
+            logger.warning(
+                "Backend rate limited (provider=%s): %s",
+                main_runtime.provider_id, exc,
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
+            return f"⚠️ {main_runtime.provider_id} 被限流，请稍后重试。"
+        except ProviderInvalidRequest as exc:
+            # 4xx 非鉴权类：通常是请求体 / 模型不支持的字段，重试无意义。
+            logger.error(
+                "Backend invalid request (provider=%s model=%s): %s",
+                main_runtime.provider_id, main_runtime.model, exc,
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
+            return f"⚠️ 请求被 provider 拒绝（{exc}）。"
+        except ProviderMaxTurnsExceeded as exc:
+            # 工具调用循环耗尽，与「provider 返回空回复」分开提示。
+            logger.warning(
+                "Backend max_turns exceeded (provider=%s max_turns=%s): %s",
+                main_runtime.provider_id, agent_max_turns, exc,
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
+            return (
+                f"⚠️ Agent 工具调用轮次达到上限（max_turns={agent_max_turns}），"
+                "请缩小任务范围或在配置里提高 agent.max_turns。"
+            )
+        except ProviderTransientError as exc:
+            logger.error(
+                "Backend transient error: %s", exc,
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
+            return f"⚠️ {main_runtime.provider_id} 调用失败：{exc}"
+        except ProviderUnknownError:
+            logger.exception(
+                "Backend unexpected error",
+                extra={"routing_key": routing_key, "session_id": session_id},
+            )
+            return "⚠️ Agent 发生内部错误，请稍后重试。"
         except Exception:  # noqa: BLE001
             logger.exception(
                 "Unexpected error in agent_fn",
                 extra={"routing_key": routing_key, "session_id": session_id},
             )
             return "⚠️ Agent 发生内部错误，请稍后重试。"
+
+        # 7a. Response Finalizer pipeline（P0-3）
+        # 在空文本判断之前执行：finalizer 可能把空文本补成默认提示，也可能把非空文本
+        # redact 成空（虽然不推荐）；二者都应当被 7b 的空文本检查覆盖。
+        # finalizer 本身有 try/except 兜底，CompositeResponseFinalizer 单 finalizer
+        # 抛错时沿用上一步文本，所以这里不再额外包 try。
+        try:
+            final_text = await finalizer.finalize(
+                final_text,
+                ResponseFinalizeContext(
+                    session_id=session_id,
+                    routing_key=routing_key,
+                    root_id=root_id,
+                    skills_called=skills_called,
+                    role="main",
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            # 双保险：finalizer 协议要求自己不抛错；若实现违反协议，仍不应崩主流程。
+            logger.warning(
+                "response_finalizer.finalize raised; using original text",
+                extra={"routing_key": routing_key, "session_id": session_id},
+                exc_info=True,
+            )
 
         if not final_text:
             return "⚠️ Claude 未返回有效回复，请重试。"
@@ -234,7 +375,6 @@ def build_agent_fn(
             {"role": "assistant", "content": final_text},
         ]
         try:
-            # 保留已有摘要 + 追加本轮，超阈值时 in-place 压缩
             updated_ctx = ctx_messages + turn_messages
             maybe_compress(updated_ctx)
             save_session_ctx(session_id, updated_ctx, ctx_dir)

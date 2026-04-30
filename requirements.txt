@@ -15,6 +15,9 @@ claude-agent-sdk>=0.1.0
 # OpenAI 兼容客户端 (context_mgmt 摘要压缩 + indexer 向量化，调用通义 DashScope)
 openai>=1.0.0
 
+# OpenAIChatBackend (P3) 直连 chat/completions，不依赖 openai SDK
+httpx>=0.27
+
 # pgvector 写入 (indexer + search_memory 脚本)
 psycopg2-binary>=2.9.0
 

@@ -14,16 +14,79 @@ import hashlib
 import json
 import logging
 import os
-from typing import Any
+import time
+from typing import Any, Mapping
+
+from evopaw.memory._dashscope_clients import make_openai_client, resolved_extra_body
+from evopaw.observability.metrics import record_llm_call
+from evopaw.provider_runtime import ResolveError, ResolvedRuntime, resolve_runtime
 
 logger = logging.getLogger(__name__)
 
 # 通义 API 配置
 # 模型名通过环境变量 fallback，支持运维不改源码切换记忆系统的 LLM（m-7）。
+# resolver 接入后（configure_memory_runtime 被 main.py 调用），_EMBED_MODEL/_EXTRACT_MODEL
+# 会被 roles.memory_embedding / roles.memory_extract 的解析结果覆盖。
 _QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "")
 _EMBED_MODEL   = os.getenv("EVOPAW_MEMORY_EMBED_MODEL", "text-embedding-v3")
 _EMBED_DIM     = int(os.getenv("EVOPAW_MEMORY_EMBED_DIM", "1024"))
 _EXTRACT_MODEL = os.getenv("EVOPAW_MEMORY_EXTRACT_MODEL", "qwen3-max")
+
+# resolver 注入的 runtime（启动期由 main.py 调一次 configure_memory_runtime 设置）。
+_resolved_extract: ResolvedRuntime | None = None
+_resolved_embed:   ResolvedRuntime | None = None
+
+
+def configure_memory_runtime(app_config: Mapping) -> None:
+    """启动期注入 app_config，使 indexer 通过 resolver 解析 model/base_url/api_key。
+
+    未调用时模块沿用旧行为（env var + DashScope 硬编码端点），保持向后兼容。
+    解析失败（ResolveError）的角色不阻断启动，仅 warn 并保留旧路径。
+
+    P1-2：memory_extract / memory_embedding 当前仅支持 OpenAI-compatible 端点
+    （`make_openai_client()` 永远返回 OpenAI SDK 实例；embedding 也走 chat
+    base_url）。如果 resolver 解析出其它 runtime_family（如 anthropic_messages），
+    运行时必失败——此处显式抛 ResolveError，避免「配置静态合法、运行时必失败」
+    的误导性路径。
+    """
+    global _resolved_extract, _resolved_embed, _EXTRACT_MODEL, _EMBED_MODEL, _llm_client, _embed_client
+    try:
+        resolved = resolve_runtime("memory_extract", app_config)
+    except ResolveError as e:
+        logger.warning("memory_extract 角色解析失败，沿用旧路径：%s", e)
+        _resolved_extract = None
+    else:
+        if resolved.runtime_family != "openai_chat":
+            raise ResolveError(
+                f"memory_extract 当前仅支持 openai_chat runtime_family（解析为 "
+                f"provider={resolved.provider_id} family={resolved.runtime_family}）。"
+                "如需其它 provider 接入，需先扩展 _dashscope_clients 的客户端构造逻辑。"
+            )
+        _resolved_extract = resolved
+        _EXTRACT_MODEL = resolved.model
+
+    try:
+        resolved = resolve_runtime("memory_embedding", app_config)
+    except ResolveError as e:
+        logger.warning("memory_embedding 角色解析失败，沿用旧路径：%s", e)
+        _resolved_embed = None
+    else:
+        if resolved.runtime_family != "openai_chat":
+            raise ResolveError(
+                f"memory_embedding 当前仅支持 openai_chat runtime_family（解析为 "
+                f"provider={resolved.provider_id} family={resolved.runtime_family}）。"
+                "如需其它 provider 接入，需先扩展 _dashscope_clients 的客户端构造逻辑。"
+            )
+        _resolved_embed = resolved
+        _EMBED_MODEL = resolved.model
+
+    # 失效模块级单例，下次调用时按新 runtime 重建
+    _llm_client = None
+    _embed_client = None
+    logger.info(
+        "indexer runtime configured: extract=%s embed=%s",
+        _EXTRACT_MODEL, _EMBED_MODEL,
+    )
 
 _EXTRACT_PROMPT = """\
 分析以下一轮对话，提取结构化信息，以 JSON 格式返回：
@@ -49,13 +112,12 @@ def _connect_db(db_dsn: str):
     return psycopg2.connect(db_dsn)
 
 
-def _make_llm_client():
-    """惰性创建 LLM client（避免模块导入时就初始化）"""
-    from openai import OpenAI  # noqa: PLC0415
-    return OpenAI(
-        api_key  = _QWEN_API_KEY,
-        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    )
+def _make_llm_client(resolved: ResolvedRuntime | None = None):
+    """惰性创建 LLM client（避免模块导入时就初始化）。
+
+    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`（P1-4）。
+    """
+    return make_openai_client(resolved)
 
 
 # 模块级 client（惰性初始化）
@@ -66,7 +128,7 @@ _embed_client = None
 def _get_llm_client():
     global _llm_client
     if _llm_client is None:
-        _llm_client = _make_llm_client()
+        _llm_client = _make_llm_client(_resolved_extract)
     return _llm_client
 
 
@@ -74,7 +136,7 @@ def _get_embed_client():
     global _embed_client
     if _embed_client is None:
         # 通义 embedding 与 chat 共用 base_url 和 OpenAI 兼容格式，复用同一构造函数。
-        _embed_client = _make_llm_client()
+        _embed_client = _make_llm_client(_resolved_embed)
     return _embed_client
 
 
@@ -108,16 +170,37 @@ def extract_summary_and_tags(
     """调 LLM 提取一句话摘要 + 领域标签。
 
     每轮只调用一次模型；malformed JSON 时兜底为 ``(user[:50], [])``，不抛异常。
+    成功路径通过 ``record_llm_call`` 上报到 metrics；调用方 ``_index_single_turn``
+    用 try/except 兜底，HTTP 异常会传播出去并在那里 warn——故失败打点交给上层。
     """
+    started_at = time.monotonic()
+    provider_id    = _resolved_extract.provider_id    if _resolved_extract else "dashscope"
+    runtime_family = _resolved_extract.runtime_family if _resolved_extract else "openai_chat"
+
     prompt = _EXTRACT_PROMPT.format(
         user_message    = user_message[:500],
         assistant_reply = assistant_reply[:500],
     )
-    resp = _get_llm_client().chat.completions.create(
-        model    = _EXTRACT_MODEL,
-        messages = [{"role": "user", "content": prompt}],
-        extra_body = {"enable_thinking": False},
+    extra_body = resolved_extra_body(_resolved_extract)
+    try:
+        resp = _get_llm_client().chat.completions.create(
+            model    = _EXTRACT_MODEL,
+            messages = [{"role": "user", "content": prompt}],
+            extra_body = extra_body,
+        )
+    except Exception:
+        _record_memory_metric(
+            provider_id, runtime_family, "memory_extract", "error", started_at,
+        )
+        raise
+
+    usage = getattr(resp, "usage", None)
+    _record_memory_metric(
+        provider_id, runtime_family, "memory_extract", "success", started_at,
+        input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+        output_tokens=int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
     )
+
     raw = resp.choices[0].message.content.strip()
 
     # 剥离 markdown 代码块
@@ -138,15 +221,60 @@ def extract_summary_and_tags(
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """批量向量化，返回 dim=1024 的 float[] 列表。"""
+    """批量向量化，返回 dim=1024 的 float[] 列表。
+
+    成功 / 失败两路均通过 ``record_llm_call`` 上报。embedding 接口
+    output_tokens 恒为 0，token 用量记到 input_tokens（与 chat 调用对齐）。
+    """
     if not texts:
         return []
-    resp = _get_embed_client().embeddings.create(
-        model      = _EMBED_MODEL,
-        input      = texts,
-        dimensions = _EMBED_DIM,
+    started_at = time.monotonic()
+    provider_id    = _resolved_embed.provider_id    if _resolved_embed else "dashscope"
+    runtime_family = _resolved_embed.runtime_family if _resolved_embed else "openai_chat"
+
+    try:
+        resp = _get_embed_client().embeddings.create(
+            model      = _EMBED_MODEL,
+            input      = texts,
+            dimensions = _EMBED_DIM,
+        )
+    except Exception:
+        _record_memory_metric(
+            provider_id, runtime_family, "memory_embedding", "error", started_at,
+        )
+        raise
+
+    usage = getattr(resp, "usage", None)
+    _record_memory_metric(
+        provider_id, runtime_family, "memory_embedding", "success", started_at,
+        input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
     )
     return [item.embedding for item in resp.data]
+
+
+def _record_memory_metric(
+    provider_id: str,
+    runtime_family: str,
+    role: str,
+    outcome: str,
+    started_at: float,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """对齐 backend 层 `_record` 的语义；失败仅 warn，不抛。"""
+    try:
+        record_llm_call(
+            provider_id=provider_id,
+            runtime_family=runtime_family,
+            role=role,
+            outcome=outcome,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_seconds=time.monotonic() - started_at,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("record_llm_call failed for role=%s", role, exc_info=True)
 
 
 # ── Step 4：写入 pgvector ────────────────────────────────────────

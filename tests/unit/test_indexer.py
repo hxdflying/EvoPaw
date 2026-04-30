@@ -494,3 +494,129 @@ class TestModelEnvOverride:
             importlib.reload(ctx)
             assert ctx._SUMMARY_MODEL == "custom-summary"
         importlib.reload(ctx)  # 恢复默认
+
+
+# ── P1-2：configure_memory_runtime 仅接受 openai_chat ────────────
+
+
+class TestConfigureMemoryRuntime:
+    """memory_extract / memory_embedding 当前仅支持 OpenAI-compatible 端点。
+
+    若 resolver 解析出其它 runtime_family（如 anthropic_messages），运行时必失败
+    （make_openai_client 永远返回 OpenAI SDK 实例）。configure_memory_runtime
+    在启动期 fail-fast，避免「配置静态合法、运行时崩溃」。
+    """
+
+    def setup_method(self):
+        import evopaw.memory.indexer as idx
+        idx._resolved_extract = None
+        idx._resolved_embed = None
+        idx._llm_client = None
+        idx._embed_client = None
+
+    def teardown_method(self):
+        self.setup_method()
+
+    def test_default_dashscope_passes(self):
+        """默认配置走 dashscope（openai_chat），通过校验。"""
+        from evopaw.memory.indexer import configure_memory_runtime
+        configure_memory_runtime({})  # 不抛异常
+
+    def test_extract_on_anthropic_provider_rejected(self):
+        """memory_extract 配到 anthropic_messages 时启动期 raise ResolveError。"""
+        from evopaw.memory.indexer import configure_memory_runtime
+        from evopaw.provider_runtime import ResolveError
+        cfg = {"roles": {"memory_extract": {"provider": "anthropic"}}}
+        with pytest.raises(ResolveError, match="openai_chat"):
+            configure_memory_runtime(cfg)
+
+    def test_embedding_on_anthropic_provider_rejected(self):
+        """memory_embedding 配到 anthropic_messages 时启动期 raise ResolveError。"""
+        from evopaw.memory.indexer import configure_memory_runtime
+        from evopaw.provider_runtime import ResolveError
+        cfg = {"roles": {"memory_embedding": {"provider": "anthropic"}}}
+        with pytest.raises(ResolveError, match="openai_chat"):
+            configure_memory_runtime(cfg)
+
+    def test_extract_on_claude_sdk_provider_rejected(self):
+        """claude_sdk_compat 也不行（client 走 OpenAI SDK，runtime 不兼容）。"""
+        from evopaw.memory.indexer import configure_memory_runtime
+        from evopaw.provider_runtime import ResolveError
+        cfg = {"roles": {"memory_extract": {"provider": "claude_sdk"}}}
+        with pytest.raises(ResolveError, match="openai_chat"):
+            configure_memory_runtime(cfg)
+
+
+# ── P2-3：memory roles 接入 record_llm_call ─────────────────────
+
+
+class TestExtractMetrics:
+    """extract_summary_and_tags 成功 / 失败两路都打 record_llm_call。"""
+
+    def test_success_records_role_memory_extract(self):
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = '{"summary": "x", "tags": []}'
+        mock_resp.usage.prompt_tokens = 12
+        mock_resp.usage.completion_tokens = 5
+
+        with patch("evopaw.memory.indexer._llm_client") as mock_client, \
+             patch("evopaw.memory.indexer.record_llm_call") as mock_rec:
+            mock_client.chat.completions.create.return_value = mock_resp
+            extract_summary_and_tags("hi", "hello")
+
+        mock_rec.assert_called_once()
+        kw = mock_rec.call_args.kwargs
+        assert kw["role"] == "memory_extract"
+        assert kw["outcome"] == "success"
+        assert kw["input_tokens"] == 12
+        assert kw["output_tokens"] == 5
+
+    def test_error_records_outcome_error_and_propagates(self):
+        with patch("evopaw.memory.indexer._llm_client") as mock_client, \
+             patch("evopaw.memory.indexer.record_llm_call") as mock_rec:
+            mock_client.chat.completions.create.side_effect = RuntimeError("API down")
+            with pytest.raises(RuntimeError, match="API down"):
+                extract_summary_and_tags("hi", "hello")
+
+        mock_rec.assert_called_once()
+        assert mock_rec.call_args.kwargs["role"] == "memory_extract"
+        assert mock_rec.call_args.kwargs["outcome"] == "error"
+
+
+class TestEmbedTextsMetrics:
+    """embed_texts 成功 / 失败两路都打 record_llm_call。"""
+
+    def test_success_records_role_memory_embedding(self):
+        mock_item = MagicMock()
+        mock_item.embedding = [0.1] * 1024
+        mock_resp = MagicMock()
+        mock_resp.data = [mock_item]
+        mock_resp.usage.prompt_tokens = 4
+
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client, \
+             patch("evopaw.memory.indexer.record_llm_call") as mock_rec:
+            mock_client.return_value.embeddings.create.return_value = mock_resp
+            embed_texts(["x"])
+
+        mock_rec.assert_called_once()
+        kw = mock_rec.call_args.kwargs
+        assert kw["role"] == "memory_embedding"
+        assert kw["outcome"] == "success"
+        assert kw["input_tokens"] == 4
+
+    def test_empty_input_no_record(self):
+        """空输入时不打点（也不调用 API）。"""
+        with patch("evopaw.memory.indexer.record_llm_call") as mock_rec:
+            assert embed_texts([]) == []
+        mock_rec.assert_not_called()
+
+    def test_error_records_outcome_error_and_propagates(self):
+        with patch("evopaw.memory.indexer._get_embed_client") as mock_client, \
+             patch("evopaw.memory.indexer.record_llm_call") as mock_rec:
+            mock_client.return_value.embeddings.create.side_effect = RuntimeError("embed down")
+            with pytest.raises(RuntimeError, match="embed down"):
+                embed_texts(["x"])
+
+        mock_rec.assert_called_once()
+        assert mock_rec.call_args.kwargs["role"] == "memory_embedding"
+        assert mock_rec.call_args.kwargs["outcome"] == "error"

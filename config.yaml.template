@@ -16,12 +16,57 @@ bot:
 
 agent:
   # 主 Agent 模型（Claude Sonnet 4.6）
+  # ⚠️ 多 provider 改造 P1：planner_model / sub_agent_model 仍兼容读取，
+  #    但启动时会打 deprecation warning，建议迁移到下方 roles 块。
   planner_model: "claude-sonnet-4-6"
   # Sub-Agent 模型（Claude Haiku 4.5，成本更低）
   sub_agent_model: "claude-haiku-4-5"
   max_turns: 50
   sub_agent_max_turns: 20
   timeout_s: 300
+  # 通用 generation 参数（仅 HTTP backend 消费：openai_chat / anthropic_messages；
+  # claude_sdk_compat 由 SDK 自管，此组参数不消费）。
+  # 缺省（不写）时：openai_chat 不在请求体里下发；anthropic_messages 用 max_tokens=4096，
+  # temperature/top_p 不下发——交给 provider 自身默认。
+  # max_tokens: 4096
+  # temperature: 0.7
+  # top_p: 0.9
+
+# ──────────────────────────────────────────────────────────────────
+# 多 provider 改造（P1）：可选配置
+# ──────────────────────────────────────────────────────────────────
+#
+# 不写 providers / roles 块时，行为与改造前完全一致：main / subagent 走 claude_sdk，
+# memory_summary / memory_embedding / memory_extract 走 dashscope（QWEN_API_KEY）。
+#
+# 【内置 provider，可直接引用，无需在 providers 块中声明】：
+#   - claude_sdk        （runtime_family=claude_sdk_compat；CLI OAuth）
+#   - anthropic         （runtime_family=anthropic_messages；ANTHROPIC_API_KEY）
+#   - dashscope         （runtime_family=openai_chat；QWEN_API_KEY）
+#
+# 【非内置 provider（如 moonshot / openai / deepseek / openrouter / 本地 vLLM）必须
+#  在 providers 块中显式声明 runtime_family + api_key_env + default_api_base 才能引用】。
+#  下面 moonshot 示例就是这种写法的样板，并非内置项。
+#
+# 内置角色：main / subagent / memory_summary / memory_embedding / memory_extract。
+#
+# 示例（取消注释以使用）：
+#
+# providers:
+#   dashscope:
+#     default_model: "qwen3-max"
+#   moonshot:                   # 非内置：必须声明 runtime_family / api_key_env / default_api_base
+#     runtime_family: openai_chat
+#     api_key_env: MOONSHOT_API_KEY
+#     default_api_base: "https://api.moonshot.cn/v1"
+#     default_model: "moonshot-v1-32k"
+#
+# roles:
+#   main:              { provider: claude_sdk, model: claude-sonnet-4-6 }
+#   subagent:          { provider: claude_sdk, model: claude-haiku-4-5 }
+#   memory_summary:    { provider: dashscope,  model: qwen3-turbo }
+#   memory_embedding:  { provider: dashscope,  model: text-embedding-v3 }
+#   memory_extract:    { provider: dashscope,  model: qwen3-max }
 
 skills:
   global_dir: "../skills"

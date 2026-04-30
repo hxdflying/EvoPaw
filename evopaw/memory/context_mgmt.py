@@ -5,9 +5,15 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import time
 from datetime import timezone
 from pathlib import Path
 import os
+from typing import Mapping
+
+from evopaw.memory._dashscope_clients import make_openai_client, resolved_extra_body
+from evopaw.observability.metrics import record_llm_call
+from evopaw.provider_runtime import ResolveError, ResolvedRuntime, resolve_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -101,37 +107,115 @@ _SUMMARY_PROMPT = """\
 """
 
 # 摘要 LLM 模型名通过环境变量 fallback（m-7），运维可在不改源码情况下切换。
+# resolver 接入后（configure_memory_runtime 被 main.py 调用），此值会被覆盖为 roles.memory_summary.model。
 _SUMMARY_MODEL = os.getenv("EVOPAW_MEMORY_SUMMARY_MODEL", "qwen3-turbo")
 
+# resolver 注入的 runtime（启动期由 main.py 调一次 configure_memory_runtime 设置）。
+# 为 None 时走旧的「环境变量 + DashScope 硬编码 base_url」路径，保持向后兼容。
+_resolved_summary: ResolvedRuntime | None = None
 
-def _make_summary_client():
-    """创建摘要用的 LLM client（OpenAI 兼容格式，通义 DashScope）。"""
-    from openai import OpenAI  # noqa: PLC0415
-    return OpenAI(
-        api_key=os.getenv("QWEN_API_KEY", ""),
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+
+def configure_memory_runtime(app_config: Mapping) -> None:
+    """启动期注入 app_config，使 _summarize_chunk 通过 resolver 解析 model/base_url/api_key。
+
+    未调用时模块沿用旧行为（env var + DashScope 硬编码端点），保持向后兼容。
+
+    P1-2：memory_summary 当前仅支持 OpenAI-compatible chat completions 端点
+    （`make_openai_client()` 永远返回 OpenAI SDK 实例）。如果 resolver 解析出
+    其它 runtime_family（如 anthropic_messages），运行时必失败——此处显式
+    抛 ResolveError，避免「配置静态合法、运行时必失败」的误导性路径。
+    """
+    global _resolved_summary, _SUMMARY_MODEL
+    try:
+        resolved = resolve_runtime("memory_summary", app_config)
+    except ResolveError as e:
+        logger.warning("memory_summary 角色解析失败，沿用旧路径：%s", e)
+        _resolved_summary = None
+        return
+    if resolved.runtime_family != "openai_chat":
+        raise ResolveError(
+            f"memory_summary 当前仅支持 openai_chat runtime_family（解析为 "
+            f"provider={resolved.provider_id} family={resolved.runtime_family}）。"
+            "如需其它 provider 接入，需先扩展 _dashscope_clients 的客户端构造逻辑。"
+        )
+    _resolved_summary = resolved
+    _SUMMARY_MODEL = resolved.model
+    logger.info(
+        "memory_summary resolved: provider=%s model=%s",
+        resolved.provider_id, resolved.model,
     )
 
 
+def _make_summary_client():
+    """创建摘要用的 LLM client（OpenAI 兼容格式，通义 DashScope 默认）。
+
+    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`（P1-4）。
+    """
+    return make_openai_client(_resolved_summary)
+
+
 def _summarize_chunk(messages: list[dict]) -> str:
-    """用轻量模型生成一段历史的摘要。可在测试中 mock。"""
+    """用轻量模型生成一段历史的摘要。可在测试中 mock。
+
+    成功 / 失败两路都通过 ``record_llm_call`` 上报到 metrics（role=memory_summary）。
+    """
+    started_at = time.monotonic()
+    provider_id    = _resolved_summary.provider_id    if _resolved_summary else "dashscope"
+    runtime_family = _resolved_summary.runtime_family if _resolved_summary else "openai_chat"
+
     try:
         client = _make_summary_client()
         history = "\n".join(
             f"{m.get('role', '')}: {str(m.get('content', ''))[:300]}"
             for m in messages
         )
+        extra_body = resolved_extra_body(_resolved_summary)
         resp = client.chat.completions.create(
             model=_SUMMARY_MODEL,
             messages=[
                 {"role": "user", "content": _SUMMARY_PROMPT.format(history=history)},
             ],
-            extra_body={"enable_thinking": False},
+            extra_body=extra_body,
+        )
+        usage = getattr(resp, "usage", None)
+        _record_memory_metric(
+            provider_id, runtime_family, "memory_summary", "success",
+            started_at,
+            input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+            output_tokens=int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
         )
         return resp.choices[0].message.content.strip()
     except Exception:  # noqa: BLE001
         logger.warning("_summarize_chunk failed, using fallback", exc_info=True)
+        _record_memory_metric(
+            provider_id, runtime_family, "memory_summary", "error", started_at,
+        )
         return "[压缩失败，内容省略]"
+
+
+def _record_memory_metric(
+    provider_id: str,
+    runtime_family: str,
+    role: str,
+    outcome: str,
+    started_at: float,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """对齐 backend 层 `_record` 的语义；失败仅 warn，不抛。"""
+    try:
+        record_llm_call(
+            provider_id=provider_id,
+            runtime_family=runtime_family,
+            role=role,
+            outcome=outcome,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_seconds=time.monotonic() - started_at,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("record_llm_call failed for role=%s", role, exc_info=True)
 
 
 def maybe_compress(

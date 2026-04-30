@@ -9,13 +9,15 @@ from unittest.mock import patch
 import pytest
 
 from evopaw.session.models import MessageEntry
-from evopaw.tools.skill_loader import (
+from evopaw.skills_runtime.adapters.claude_mcp import build_skill_loader_server
+from evopaw.skills_runtime.dispatcher import _handle_history_reader
+from evopaw.skills_runtime.instructions import (
     _build_description_xml,
+    _get_skill_instructions,
+)
+from evopaw.skills_runtime.registry import (
     _build_skill_registry,
     _extract_frontmatter_description,
-    _get_skill_instructions,
-    _handle_history_reader,
-    build_skill_loader_server,
 )
 
 

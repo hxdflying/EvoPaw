@@ -31,9 +31,14 @@ from evopaw.feishu.downloader import FeishuDownloader
 from evopaw.feishu.listener import FeishuListener, run_forever
 from evopaw.feishu.sender import FeishuSender
 from evopaw.llm import check_claude_cli
-from evopaw.memory.indexer import shutdown_index_clients
+from evopaw.memory.context_mgmt import configure_memory_runtime as _cfg_summary_runtime
+from evopaw.memory.indexer import (
+    configure_memory_runtime as _cfg_index_runtime,
+    shutdown_index_clients,
+)
 from evopaw.observability.logging_config import setup_logging
 from evopaw.observability.metrics_server import start_metrics_server
+from evopaw.provider_runtime import ResolveError, resolve_runtime
 from evopaw.runner import Runner
 from evopaw.session.manager import SessionManager
 
@@ -98,6 +103,25 @@ def _load_config(config_path: Path) -> dict:
     return data
 
 
+def _validate_subagent_runtime(sub_runtime) -> None:
+    """启动期校验 Sub-Agent runtime（P1-1 修复）。
+
+    task 型 Skill 的执行路径仍是 `SkillDispatcher.dispatch → run_skill_agent
+    → claude_agent_sdk.query`，与主 Agent runtime 解耦。如果用户把
+    `roles.subagent` 切到非 claude_sdk_compat，启动期就显式拒绝，避免 CLI
+    检查跳过却在第一次 task skill 调用时才暴露错误。
+
+    跨 provider Sub-Agent 列入 P6，待真正落地后放开。
+    """
+    if sub_runtime.runtime_family != "claude_sdk_compat":
+        raise RuntimeError(
+            f"roles.subagent 必须使用 claude_sdk_compat runtime（当前解析为 "
+            f"provider={sub_runtime.provider_id} family={sub_runtime.runtime_family}）。"
+            "task 类型 Skill 的 Sub-Agent 仍依赖 Claude Agent SDK；跨 provider Sub-Agent "
+            "为 P6 计划项，未落地。"
+        )
+
+
 async def _daily_cleanup_loop(cleanup_svc: CleanupService) -> None:
     """每日 3:00（Asia/Shanghai）定时清理（独立协程，不依赖 CronService）。"""
     import datetime
@@ -129,13 +153,40 @@ async def async_main() -> None:
 
     logger.info("EvoPaw starting. data_dir=%s", data_dir)
 
-    # ── 2. 检测 Claude Code CLI ────────────────────────────────────────────
-    if not check_claude_cli():
-        raise RuntimeError(
-            "Claude Code CLI 未安装或不在 PATH 中。"
-            "Claude Agent SDK 依赖此 CLI，请先安装：npm install -g @anthropic-ai/claude-code"
+    # ── 2. 解析主 / 子 Agent runtime（多 provider P1）─────────────────────
+    try:
+        main_runtime = resolve_runtime("main", cfg)
+        sub_runtime  = resolve_runtime("subagent", cfg)
+    except ResolveError as e:
+        raise RuntimeError(f"主 Agent runtime 解析失败：{e}") from e
+
+    _validate_subagent_runtime(sub_runtime)
+
+    # main / subagent 至少一者解析为 claude_sdk_compat 时才需 Claude CLI；
+    # 由于 sub 已强制为 claude_sdk_compat（见上），这里几乎总是 True，但仍保留判断
+    # 以便未来 P6 解锁后逻辑仍正确。
+    needs_claude_cli = (
+        main_runtime.runtime_family == "claude_sdk_compat"
+        or sub_runtime.runtime_family == "claude_sdk_compat"
+    )
+    if needs_claude_cli:
+        if not check_claude_cli():
+            raise RuntimeError(
+                "Claude Code CLI 未安装或不在 PATH 中。"
+                "当前 main/subagent 角色解析为 claude_sdk_compat，"
+                "请先安装：npm install -g @anthropic-ai/claude-code"
+            )
+        logger.info("Claude Code CLI detected.")
+    else:
+        logger.info(
+            "main=%s/%s, subagent=%s/%s 均非 claude_sdk_compat，跳过 Claude CLI 检测。",
+            main_runtime.provider_id, main_runtime.runtime_family,
+            sub_runtime.provider_id, sub_runtime.runtime_family,
         )
-    logger.info("Claude Code CLI detected.")
+
+    # ── 2b. 配置 memory 模块的 provider runtime（resolver 注入）──────────
+    _cfg_summary_runtime(cfg)
+    _cfg_index_runtime(cfg)
 
     # ── 3. 读取关键配置 ────────────────────────────────────────────────────
     feishu_cfg = cfg.get("feishu", {})
@@ -159,10 +210,25 @@ async def async_main() -> None:
     test_api_port = debug_cfg.get("test_api_port", 9090)
 
     agent_cfg = cfg.get("agent", {})
-    planner_model = agent_cfg.get("planner_model", "claude-sonnet-4-6")
-    sub_agent_model = agent_cfg.get("sub_agent_model", "claude-haiku-4-5")
+    # main / subagent 模型一律走 resolver 拿（main_runtime.model / sub_runtime.model）；
+    # 旧字段 agent.planner_model / agent.sub_agent_model 在 resolver 内部以 deprecation
+    # warning 形式兼容，新代码不再直接读取。
     agent_max_turns = agent_cfg.get("max_turns", 50)
     sub_agent_max_turns = agent_cfg.get("sub_agent_max_turns", 20)
+    # P2-4：HTTP backend (openai_chat / anthropic_messages) 透传单次请求超时；
+    # claude_sdk_compat 由 Claude Agent SDK 自管，此参数不消费。
+    agent_timeout_s = float(agent_cfg.get("timeout_s", 120.0))
+    # P2-1：通用 generation 参数（HTTP backend 消费；claude_sdk_compat 不消费）。
+    # 缺省（None）时 backend 走自身默认（Anthropic Messages 用 4096，OpenAI 不下发）。
+    agent_max_tokens = agent_cfg.get("max_tokens")
+    if agent_max_tokens is not None:
+        agent_max_tokens = int(agent_max_tokens)
+    agent_temperature = agent_cfg.get("temperature")
+    if agent_temperature is not None:
+        agent_temperature = float(agent_temperature)
+    agent_top_p = agent_cfg.get("top_p")
+    if agent_top_p is not None:
+        agent_top_p = float(agent_top_p)
 
     sender_cfg = cfg.get("sender", {})
     sender_max_retries = sender_cfg.get("max_retries", 3)
@@ -208,12 +274,16 @@ async def async_main() -> None:
         sender=sender,
         workspace_dir=workspace_dir,
         ctx_dir=ctx_dir,
+        main_runtime=main_runtime,
+        sub_runtime=sub_runtime,
         db_dsn=db_dsn,
         max_history_turns=max_history_turns,
-        planner_model=planner_model,
         agent_max_turns=agent_max_turns,
-        sub_agent_model=sub_agent_model,
         sub_agent_max_turns=sub_agent_max_turns,
+        agent_timeout_s=agent_timeout_s,
+        agent_max_tokens=agent_max_tokens,
+        agent_temperature=agent_temperature,
+        agent_top_p=agent_top_p,
     )
 
     # ── 6b. 构建 ASR 服务（可选）─────────────────────────────────────────────

@@ -13,7 +13,7 @@ import evopaw.tools.add_image_tool_local as _m
 from evopaw.tools.add_image_tool_local import (
     _compress_image,
     extract_image_path,
-    load_image_for_claude,
+    load_image_data,
 )
 
 
@@ -58,40 +58,39 @@ class TestCompressImage:
         assert isinstance(result, bytes)
 
 
-class TestLoadImageForClaude:
-    def test_valid_jpeg_returns_image_block(self, tmp_path):
+class TestLoadImageData:
+    def test_valid_jpeg_returns_b64_and_mime(self, tmp_path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         img_file = ws / "photo.jpg"
         img_file.write_bytes(_make_jpeg_bytes())
-        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        result = load_image_data(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result["type"] == "image"
-        assert result["source"]["type"] == "base64"
-        assert result["source"]["media_type"] == "image/jpeg"
-        assert len(result["source"]["data"]) > 0
+        b64, mime = result
+        assert mime == "image/jpeg"
+        assert len(b64) > 0
 
     def test_valid_png_returns_correct_media_type(self, tmp_path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         img_file = ws / "icon.png"
         img_file.write_bytes(_make_png_bytes())
-        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        result = load_image_data(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result["source"]["media_type"] == "image/png"
+        assert result[1] == "image/png"
 
     def test_path_outside_workspace_returns_none(self, tmp_path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         outside = tmp_path / "secret.jpg"
         outside.write_bytes(_make_jpeg_bytes())
-        result = load_image_for_claude(str(outside), workspace_root=ws)
+        result = load_image_data(str(outside), workspace_root=ws)
         assert result is None
 
     def test_nonexistent_file_returns_none(self, tmp_path):
         ws = tmp_path / "workspace"
         ws.mkdir()
-        result = load_image_for_claude(str(ws / "missing.jpg"), workspace_root=ws)
+        result = load_image_data(str(ws / "missing.jpg"), workspace_root=ws)
         assert result is None
 
     def test_non_image_extension_returns_none(self, tmp_path):
@@ -99,7 +98,7 @@ class TestLoadImageForClaude:
         ws.mkdir()
         txt_file = ws / "data.txt"
         txt_file.write_text("not an image")
-        result = load_image_for_claude(str(txt_file), workspace_root=ws)
+        result = load_image_data(str(txt_file), workspace_root=ws)
         assert result is None
 
     def test_file_too_large_returns_none(self, tmp_path):
@@ -107,7 +106,7 @@ class TestLoadImageForClaude:
         ws.mkdir()
         big = ws / "big.jpg"
         big.write_bytes(b"x" * (21 * 1024 * 1024))
-        result = load_image_for_claude(str(big), workspace_root=ws)
+        result = load_image_data(str(big), workspace_root=ws)
         assert result is None
 
     def test_webp_media_type(self, tmp_path):
@@ -115,18 +114,18 @@ class TestLoadImageForClaude:
         ws.mkdir()
         img_file = ws / "anim.webp"
         img_file.write_bytes(_make_jpeg_bytes())
-        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        result = load_image_data(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result["source"]["media_type"] == "image/webp"
+        assert result[1] == "image/webp"
 
     def test_gif_media_type(self, tmp_path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         img_file = ws / "anim.gif"
         img_file.write_bytes(_make_jpeg_bytes())
-        result = load_image_for_claude(str(img_file), workspace_root=ws)
+        result = load_image_data(str(img_file), workspace_root=ws)
         assert result is not None
-        assert result["source"]["media_type"] == "image/gif"
+        assert result[1] == "image/gif"
 
 
 class TestExtractImagePath:

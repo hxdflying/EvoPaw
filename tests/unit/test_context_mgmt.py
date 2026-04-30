@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from evopaw.memory.context_mgmt import (
     append_session_raw,
@@ -321,3 +321,90 @@ class TestAppendSessionRaw:
         raw_path = tmp_path / "s-001_raw.jsonl"
         if raw_path.exists():
             assert raw_path.read_text(encoding="utf-8").strip() == ""
+
+
+# ── P1-2：configure_memory_runtime 仅接受 openai_chat ────────────
+
+
+class TestConfigureMemoryRuntime:
+    """memory_summary 当前仅支持 OpenAI-compatible 端点。
+
+    若 resolver 解析出 anthropic_messages / claude_sdk_compat，client 工厂
+    `make_openai_client` 仍会返回 OpenAI SDK 实例 —— 运行时调用 chat.completions.create
+    必失败。在启动期 fail-fast，避免「配置静态合法、运行时崩溃」。
+    """
+
+    def setup_method(self):
+        import evopaw.memory.context_mgmt as ctx
+        ctx._resolved_summary = None
+
+    def teardown_method(self):
+        self.setup_method()
+
+    def test_default_dashscope_passes(self):
+        """默认配置走 dashscope（openai_chat），通过校验。"""
+        from evopaw.memory.context_mgmt import configure_memory_runtime
+        configure_memory_runtime({})  # 不抛异常
+
+    def test_summary_on_anthropic_provider_rejected(self):
+        """memory_summary 配到 anthropic_messages 时启动期 raise ResolveError。"""
+        from evopaw.memory.context_mgmt import configure_memory_runtime
+        from evopaw.provider_runtime import ResolveError
+        cfg = {"roles": {"memory_summary": {"provider": "anthropic"}}}
+        with pytest.raises(ResolveError, match="openai_chat"):
+            configure_memory_runtime(cfg)
+
+    def test_summary_on_claude_sdk_provider_rejected(self):
+        """claude_sdk_compat 也不行（client 走 OpenAI SDK，runtime 不兼容）。"""
+        from evopaw.memory.context_mgmt import configure_memory_runtime
+        from evopaw.provider_runtime import ResolveError
+        cfg = {"roles": {"memory_summary": {"provider": "claude_sdk"}}}
+        with pytest.raises(ResolveError, match="openai_chat"):
+            configure_memory_runtime(cfg)
+
+
+# ── P2-3：_summarize_chunk 接入 record_llm_call ────────────────
+
+
+class TestSummarizeChunkMetrics:
+    """_summarize_chunk 成功 / 失败两路都打 record_llm_call(role=memory_summary)。"""
+
+    def test_success_records_role_memory_summary(self):
+        from evopaw.memory.context_mgmt import _summarize_chunk
+
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "摘要"
+        mock_resp.usage.prompt_tokens = 30
+        mock_resp.usage.completion_tokens = 8
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_resp
+
+        with patch("evopaw.memory.context_mgmt._make_summary_client",
+                   return_value=mock_client), \
+             patch("evopaw.memory.context_mgmt.record_llm_call") as mock_rec:
+            out = _summarize_chunk([{"role": "user", "content": "hi"}])
+
+        assert out == "摘要"
+        mock_rec.assert_called_once()
+        kw = mock_rec.call_args.kwargs
+        assert kw["role"] == "memory_summary"
+        assert kw["outcome"] == "success"
+        assert kw["input_tokens"] == 30
+        assert kw["output_tokens"] == 8
+
+    def test_error_records_outcome_error_and_returns_fallback(self):
+        from evopaw.memory.context_mgmt import _summarize_chunk
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = RuntimeError("API down")
+
+        with patch("evopaw.memory.context_mgmt._make_summary_client",
+                   return_value=mock_client), \
+             patch("evopaw.memory.context_mgmt.record_llm_call") as mock_rec:
+            out = _summarize_chunk([{"role": "user", "content": "hi"}])
+
+        assert "压缩失败" in out
+        mock_rec.assert_called_once()
+        assert mock_rec.call_args.kwargs["role"] == "memory_summary"
+        assert mock_rec.call_args.kwargs["outcome"] == "error"

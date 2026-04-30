@@ -12,7 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from evopaw.main import _build_speech_service, _warn_if_model_is_alias
+from evopaw.main import (
+    _build_speech_service,
+    _validate_subagent_runtime,
+    _warn_if_model_is_alias,
+)
+from evopaw.provider_runtime import resolve_runtime
 
 
 class TestBuildSpeechService:
@@ -61,3 +66,33 @@ class TestWarnIfModelIsAlias:
         with caplog.at_level(logging.WARNING, logger="evopaw.main"):
             _warn_if_model_is_alias(snapshot)
         assert not any("稳定别名" in r.message for r in caplog.records)
+
+
+class TestValidateSubagentRuntime:
+    """P1-1：roles.subagent 必须解析为 claude_sdk_compat。"""
+
+    def test_default_subagent_passes(self):
+        # 默认配置走 claude_sdk，校验通过。
+        rt = resolve_runtime("subagent", {})
+        _validate_subagent_runtime(rt)  # not raise
+
+    def test_subagent_on_openai_chat_provider_rejected(self):
+        cfg = {
+            "providers": {
+                "moonshot": {
+                    "runtime_family": "openai_chat",
+                    "default_api_base": "https://api.moonshot.cn/v1",
+                    "default_model": "moonshot-v1-32k",
+                }
+            },
+            "roles": {"subagent": {"provider": "moonshot"}},
+        }
+        rt = resolve_runtime("subagent", cfg)
+        with pytest.raises(RuntimeError, match="claude_sdk_compat"):
+            _validate_subagent_runtime(rt)
+
+    def test_subagent_on_anthropic_messages_rejected(self):
+        cfg = {"roles": {"subagent": {"provider": "anthropic"}}}
+        rt = resolve_runtime("subagent", cfg)
+        with pytest.raises(RuntimeError, match="claude_sdk_compat"):
+            _validate_subagent_runtime(rt)

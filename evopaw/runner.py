@@ -41,12 +41,18 @@ AgentFn = Callable[[str, list[MessageEntry], str, str, str, bool], Awaitable[str
 _HELP_TEXT = """\
 可用命令：
 /new — 创建新对话（清除历史上下文）
+/stop — 取消当前正在执行的任务
 /verbose on|off — 开启/关闭详细模式（显示推理过程）
 /verbose — 查询当前详细模式状态
 /status — 查看当前对话信息
 /help — 显示本帮助"""
 
+# /stop 不在 _SLASH_COMMANDS 内：它走 dispatch() 入口的快路径，
+# 不进入同 routing_key 队列，因此不通过 _handle_slash() 处理。
 _SLASH_COMMANDS = frozenset({"/new", "/verbose", "/help", "/status"})
+
+_STOP_OK_TEXT = "已取消当前任务。"
+_STOP_NOOP_TEXT = "当前没有进行中的任务。"
 
 
 def _build_attachment_message(sandbox_path: str, original_text: str) -> str:
@@ -158,6 +164,9 @@ class Runner:
         self._speech_service = speech_service
         self._queues: dict[str, asyncio.Queue[InboundMessage]] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
+        # P1-2：当前 routing_key 上正在执行的 _handle() task。/stop 据此 cancel。
+        # 由 _dispatch_lock 保护读写。
+        self._active_handles: dict[str, asyncio.Task[None]] = {}
         self._dispatch_lock = asyncio.Lock()
         # 最近已处理 msg_id 的 LRU 窗口，用于飞书重投递去重（设计文档 §8.1 runner）。
         self._dedup_window_size = max(0, int(dedup_window_size))
@@ -175,7 +184,16 @@ class Runner:
     # ── 公开方法 ───────────────────────────────────────────────
 
     async def dispatch(self, inbound: InboundMessage) -> None:
-        """外部入口：消息入队，确保同一会话串行执行"""
+        """外部入口：消息入队，确保同一会话串行执行。
+
+        P1-2：`/stop` 走快路径，不入队、不去重、不进 worker；这是慢任务运行
+        时取消能起作用的唯一可靠路径——同一 routing_key 下的普通消息会被串行
+        队列阻塞在 worker 之外，无法及时进入 `_handle_slash()`。
+        """
+        if self._is_stop_command(inbound):
+            await self._handle_stop(inbound)
+            return
+
         key = inbound.routing_key
         async with self._dispatch_lock:
             if key not in self._queues:
@@ -189,8 +207,55 @@ class Runner:
             self._queues[key].qsize()
         )
 
+    @staticmethod
+    def _is_stop_command(inbound: InboundMessage) -> bool:
+        """是否为 `/stop` 取消命令（仅认带文本且无附件的消息）。"""
+        if inbound.attachment is not None:
+            return False
+        text = (inbound.content or "").strip().lower()
+        return text == "/stop"
+
+    async def _handle_stop(self, inbound: InboundMessage) -> None:
+        """`/stop` 快路径：cancel 当前 active handle + 兜底 cancel 子 agent，
+        然后回复用户。"""
+        key = inbound.routing_key
+        async with self._dispatch_lock:
+            active = self._active_handles.get(key)
+
+        cancelled = False
+        if active is not None and not active.done():
+            active.cancel()
+            cancelled = True
+            # 不强行 await：cancel 后让 worker 自己回收，避免 /stop 自身被
+            # 子任务的清理逻辑拖慢；后续单测靠 mock_sender 的 wait_for_message
+            # 验证最终状态。
+
+        # P2-1 后台 sub-agent 引入后，这里负责兜底；当前主流程的 sub-agent 由
+        # _handle 调用栈承载，cancel handle 时会沿 await 链一起取消。
+        sub_count = 0
+        try:
+            from evopaw.agents.sub_agent_registry import get_default_registry  # noqa: PLC0415
+            sub_count = await get_default_registry().cancel_by_session(key)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[%s] sub_agent_registry cancel failed",
+                key,
+                extra={"routing_key": key, "feishu_msg_id": inbound.msg_id},
+            )
+
+        msg = _STOP_OK_TEXT if (cancelled or sub_count > 0) else _STOP_NOOP_TEXT
+        try:
+            await self._sender.send(key, msg, inbound.root_id)
+        except Exception:
+            logger.exception(
+                "[%s] /stop reply send failed",
+                key,
+                extra={"routing_key": key, "feishu_msg_id": inbound.msg_id},
+            )
+            record_error("runner", "stop_reply_failed")
+
     async def shutdown(self) -> None:
-        """取消所有 worker，释放资源"""
+        """取消所有 worker 和进行中的 handle，释放资源"""
         for key, queue in self._queues.items():
             if not queue.empty():
                 logger.warning(
@@ -198,12 +263,18 @@ class Runner:
                     key,
                     queue.qsize(),
                 )
+        # P1-2：先 cancel 在跑的 handle，让 sub-agent 沿调用栈尽早退出；再
+        # cancel worker，避免 worker 尚未感知 cancel 时漏掉一个 orphan handle。
+        for handle in list(self._active_handles.values()):
+            if not handle.done():
+                handle.cancel()
         for task in list(self._workers.values()):
             task.cancel()
         if self._workers:
             await asyncio.gather(*self._workers.values(), return_exceptions=True)
         self._workers.clear()
         self._queues.clear()
+        self._active_handles.clear()
 
     # ── Worker ────────────────────────────────────────────────
 
@@ -227,8 +298,30 @@ class Runner:
                         ).dec()
                 return
             log_ctx = {"routing_key": key, "feishu_msg_id": inbound.msg_id}
+            # P1-2：把 _handle 包成可 cancel 的 task，注册到 _active_handles，
+            # 让 dispatch 入口的 /stop 快路径能 cancel 当前正在跑的 handle。
+            handle_task = asyncio.create_task(self._handle(inbound))
+            async with self._dispatch_lock:
+                self._active_handles[key] = handle_task
             try:
-                await self._handle(inbound)
+                await handle_task
+            except asyncio.CancelledError:
+                if handle_task.cancelled():
+                    # /stop 触发的 handle 取消：_handle_stop 已经回过"已取消"，
+                    # 这里仅记录日志后继续 worker 主循环（worker 自身不退出）。
+                    logger.info(
+                        "[%s] handle cancelled (likely /stop) msg_id=%s",
+                        key, inbound.msg_id, extra=log_ctx,
+                    )
+                    record_error("runner", "handle_cancelled")
+                else:
+                    # worker 自身被 cancel（shutdown 等场景）：让 CancelledError
+                    # 传播出去，终止 worker。
+                    async with self._dispatch_lock:
+                        if self._active_handles.get(key) is handle_task:
+                            self._active_handles.pop(key, None)
+                    queue.task_done()
+                    raise
             except Exception:
                 logger.exception("[%s] handle error", key, extra=log_ctx)
                 record_error("runner", "handle_error")
@@ -242,6 +335,9 @@ class Runner:
                     )
                     record_error("runner", "send_error_message_failed")
             finally:
+                async with self._dispatch_lock:
+                    if self._active_handles.get(key) is handle_task:
+                        self._active_handles.pop(key, None)
                 queue.task_done()
 
     # ── Handle ────────────────────────────────────────────────

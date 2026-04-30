@@ -58,19 +58,14 @@ def _resolve_media_type(path: Path) -> str:
     return _MIME_MAP.get(path.suffix.lower(), "image/jpeg")
 
 
-def load_image_for_claude(
+def load_image_data(
     image_path: str,
     workspace_root: Path = _WORKSPACE_ROOT,
-) -> dict | None:
-    """将本地图片文件转为 Claude 原生 image content block。
+) -> tuple[str, str] | None:
+    """读取本地图片，返回 (base64_str, mime_type)；失败返回 None。
 
-    Args:
-        image_path: 本地图片路径
-        workspace_root: 允许读取的根目录（可注入，便于测试）
-
-    Returns:
-        Claude image content block dict，或 None（路径非法/文件不存在/非图片）。
-        格式: {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+    P4 多模态 content_builder 用的底层接口：把读盘 / 路径校验 / 扩展名校验 /
+    大小校验抽出，让 backend 自行根据协议族拼最终 content block。
     """
     path = Path(image_path).expanduser().resolve()
 
@@ -96,15 +91,7 @@ def load_image_for_claude(
     raw = path.read_bytes()
     b64 = base64.b64encode(raw).decode("utf-8")
     media_type = _resolve_media_type(path)
-
-    return {
-        "type": "image",
-        "source": {
-            "type": "base64",
-            "media_type": media_type,
-            "data": b64,
-        },
-    }
+    return b64, media_type
 
 
 def extract_image_path(user_message: str) -> str | None:
