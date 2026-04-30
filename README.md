@@ -1,332 +1,417 @@
-## EvoPaw（小爪子）
+<p align="right">
+  <a href="./README.md"><img alt="English" src="https://img.shields.io/badge/Language-English-blue"></a>
+  <a href="./README.zh-CN.md"><img alt="Chinese" src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87-green"></a>
+</p>
 
-基于 Claude Agent SDK 的飞书工作助手。通过 Skills 生态实现可扩展的工具调用，所有执行在容器内隔离。支持飞书 WebSocket 长连接，无需公网 IP，适合本地/内网部署。
+# EvoPaw
 
-### 核心功能
+EvoPaw is a local-first Feishu work assistant. It connects to Feishu through the
+official WebSocket channel, routes each conversation through an agent runtime,
+and expands the assistant with a file-based Skills system.
 
-- **Claude Agent SDK 驱动**：主 Agent 使用 Claude Sonnet 4.6，Sub-Agent 使用 Claude Haiku 4.5
-- **飞书全场景接入**：单聊（p2p）、群聊（group）、话题群（thread）
-- **19 个内置 Skills**：文件处理、网页搜索/浏览、飞书操作、定时任务、记忆管理、投资分析等
-- **三层记忆架构**：Bootstrap 文件注入 + ctx.json 上下文压缩 + pgvector 语义搜索
-- **图片多模态**：Claude 原生 image block，直接理解用户发送的图片
-- **语音消息**：飞书 audio 消息端到端转写（阿里云 Fun-ASR 实时 WebSocket，one-shot 模式），转写文本与原始音频同时交给 Agent；长语音先回执后正式回复
-- **Verbose 详细模式**：实时推送工具调用过程到飞书
-- **定时任务**：支持一次性（at）、固定间隔（every）、Cron 表达式三种模式
-- **TestAPI**：HTTP 接口本地调试，无需真实飞书环境
-- **卡片消息 + Loading 效果**：发送交互式卡片，Agent 思考时展示加载状态
+The project is designed for local machines, private servers, and internal
+networks. It does not require a public inbound webhook endpoint.
 
-### 架构概览
+## Highlights
 
+- Feishu WebSocket integration for direct chats, group chats, and threaded chats.
+- Multi-provider main-agent runtime with built-in `claude_sdk`, `anthropic`, and
+  `dashscope` providers, plus configurable OpenAI-compatible providers.
+- Task Skills for document processing, Feishu operations, web search, scheduling,
+  memory management, and investment workflows.
+- Three-layer memory: local bootstrap files, compressed session context, and
+  pgvector semantic search.
+- Feishu audio handling through DashScope Fun-ASR: download, transcribe, reason,
+  and reply.
+- Verbose mode that streams tool progress back to Feishu.
+- Optional local TestAPI for debugging without a real Feishu event.
+- Prometheus metrics and JSON-line runtime logs.
+
+## Architecture
+
+```text
+Feishu WebSocket
+    |
+    v
+FeishuListener
+    |
+    v
+Runner
+    |
+    v
+Main Agent Runtime
+  claude_sdk | anthropic_messages | openai_chat
+    |
+    +--> SkillDispatcher
+    |       |
+    |       +--> reference Skills and history_reader inline
+    |       +--> task Skills through Claude SDK Sub-Agent
+    |
+    +--> Memory runtime
+            |
+            +--> bootstrap files
+            +--> ctx.json / raw.jsonl
+            +--> pgvector semantic index
 ```
-飞书 WebSocket
-    │
-    ▼
-FeishuListener → Runner → Main Agent (Claude Sonnet 4.6)
-                              │
-                         skill_loader (MCP Server)
-                              │
-                ┌─────────────┼───────────────┐
-                ▼             ▼               ▼
-          reference型     task型 Skill     history_reader
-        (返回指令给      (Sub-Agent        (内联分页)
-         Main Agent)    Claude Haiku 4.5)
-                              │
-                      Bash/Read/Write/Edit
-                      (容器内执行)
-```
 
-**消息流**：飞书 → FeishuListener → SessionRouter (routing_key) → Runner → Main Agent → SkillLoaderTool → Sub-Agent → FeishuSender
+Routing keys separate conversation state:
 
-**三种路由类型**：`p2p:{open_id}`（单聊）、`group:{chat_id}`（群聊）、`thread:{chat_id}:{thread_id}`（话题）
+| Feishu context | Routing key |
+| --- | --- |
+| Direct chat | `p2p:{open_id}` |
+| Group chat | `group:{chat_id}` |
+| Threaded chat | `thread:{chat_id}:{thread_id}` |
 
-### 内置 Skills
+## Repository Map
 
-| Skill | 类型 | 能力 |
-|-------|------|------|
-| `pdf` | 任务型 | PDF 解析、文本提取 |
-| `docx` | 任务型 | Word 文档处理 |
-| `pptx` | 任务型 | PowerPoint 处理 |
-| `xlsx` | 任务型 | Excel 处理 |
-| `feishu_ops` | 任务型 | 读写飞书云文档、向群/用户发消息 |
-| `scheduler_mgr` | 任务型 | 定时任务创建/查看/删除 |
-| `tavily_search` | 任务型 | 互联网搜索（Tavily API） |
-| `arxiv_search` | 任务型 | 论文搜索与 PDF 读取 |
-| `web_browse` | 任务型 | 网页内容提取（Markdown 转换） |
-| `memory-save` | 任务型 | 持久化重要信息到记忆文件 |
-| `search_memory` | 任务型 | pgvector 语义搜索历史对话 |
-| `memory-governance` | 任务型 | 记忆清理与整理 |
-| `skill-creator` | 任务型 | 将重复操作固化为新 Skill |
-| `daily-summary` | 任务型 | 每日工作总结 |
-| `investment-report` | 任务型 | 生成投资研究报告 |
-| `investment-review` | 任务型 | 投资组合复盘与评估 |
-| `investment-consult` | 任务型 | 投资咨询对话 |
-| `hk-investment-morning-report` | 任务型 | 港股每日早报 |
-| `history_reader` | 参考型 | 分页读取历史对话（内联处理，无需 Sub-Agent） |
-
-> Skill 清单以 `evopaw/skills/load_skills.yaml` 为准；上表失同步时以 yaml 为权威来源。
-
-### 目录结构
-
-```
+```text
 evopaw/
-├── main.py                     # 进程入口
-├── models.py                   # InboundMessage / Attachment / SenderProtocol
-├── runner.py                   # 执行引擎（per-routing_key 队列、Slash 命令）
-├── llm/
-│   └── claude_client.py        # Claude Agent SDK 配置构建
-├── feishu/
-│   ├── listener.py             # WebSocket 事件 → InboundMessage
-│   ├── sender.py               # 消息发送（卡片 + Loading 效果）
-│   ├── downloader.py           # 附件下载到 session workspace
-│   └── session_key.py          # routing_key 解析
-├── agents/
-│   ├── main_agent.py           # 主 Agent（build_agent_fn 工厂）
-│   ├── skill_agent.py          # Sub-Agent 工厂（run_skill_agent）
-│   └── hooks.py                # Verbose 模式 PreToolUse/PostToolUse hooks
-├── tools/
-│   ├── skill_loader.py         # SkillLoaderTool（MCP Server，渐进式披露）
-│   └── add_image_tool_local.py # 图片加载（Claude 原生 image block）
-├── memory/
-│   ├── bootstrap.py            # soul/user/agent/memory.md 注入
-│   ├── context_mgmt.py         # ctx.json 压缩 + raw.jsonl 审计
-│   └── indexer.py              # pgvector 异步写入
-├── session/                    # SessionManager（index.json + JSONL）
-├── cron/                       # CronService（asyncio timer + 热加载）
-├── cleanup/                    # CleanupService（过期文件清理）
-├── observability/              # 日志 + Prometheus Metrics
-├── api/                        # TestAPI（aiohttp HTTP 服务）
-└── skills/                     # SKILL.md + 执行脚本（见 skills/load_skills.yaml）
+├── main.py                 # process entrypoint and service wiring
+├── runner.py               # per-routing-key queues, slash commands, dedup
+├── models.py               # inbound messages, attachments, sender protocol
+├── agent_backends/         # Claude SDK, Anthropic Messages, OpenAI-compatible backends
+├── provider_runtime/       # provider registry and role resolver
+├── content_builders/       # provider-specific text/image message builders
+├── agents/                 # main agent, sub-agent, hooks, response finalizers
+├── skills_runtime/         # skill registry, dispatcher, backend adapters
+├── skills/                 # SKILL.md files and skill scripts
+├── feishu/                 # listener, sender, downloader, session keys
+├── asr/                    # DashScope Fun-ASR client and speech service
+├── memory/                 # bootstrap, context compression, pgvector indexing
+├── session/                # session index and JSONL history
+├── cron/                   # scheduled task service
+├── cleanup/                # runtime cleanup and private credential materialization
+├── observability/          # logging, metrics, metrics server
+├── api/                    # local TestAPI
+└── tools/                  # local helper tools, including image loading
 ```
 
-### 环境准备
+## Requirements
 
-**系统依赖**：Python 3.11+、Node.js 22+、Docker
+For local development:
+
+- Python 3.12 or newer, matching `pyproject.toml`.
+- Node.js 22 or newer.
+- Claude Code CLI if `roles.subagent` uses the default `claude_sdk` runtime.
+- Docker and Docker Compose if you want the bundled pgvector service.
+- A Feishu app with bot and WebSocket event permissions.
+
+Install Python dependencies:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**环境变量**：
+Install the Claude Code CLI for the default Sub-Agent path:
 
 ```bash
-# 必填
-export ANTHROPIC_API_KEY=<Anthropic API Key>       # Claude Agent SDK
-export FEISHU_APP_ID=<飞书应用 App ID>              # 飞书开放平台
-export FEISHU_APP_SECRET=<飞书应用 App Secret>      # 飞书开放平台
-
-# 可选
-export DASHSCOPE_API_KEY=<阿里云百炼 API Key>      # 飞书语音转写（Fun-ASR）+ 通义记忆向量化
-export TAVILY_API_KEY=<Tavily API Key>             # 互联网搜索
-export MEMORY_DB_DSN=postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory
+npm install -g @anthropic-ai/claude-code
 ```
 
-> 历史变量名 `QWEN_API_KEY` 与 `DASHSCOPE_API_KEY` 同源（都指向阿里云百炼），`evopaw/asr/*` 与记忆向量化均使用后者。
+Authenticate the CLI or configure API keys according to the provider runtime you
+choose.
 
-### 配置
+## Configuration
 
-复制模板并填写凭证：
+Create a private runtime config:
 
 ```bash
 cp config.yaml.template config.yaml
 ```
 
-核心配置项：
+`config.yaml` is intentionally ignored by Git. Keep real credentials and local
+deployment details there, not in committed files.
+
+Minimum Feishu configuration:
 
 ```yaml
 feishu:
   app_id: "${FEISHU_APP_ID}"
   app_secret: "${FEISHU_APP_SECRET}"
-
-agent:
-  planner_model: "claude-sonnet-4-6"     # 主 Agent 模型
-  sub_agent_model: "claude-haiku-4-5"    # 任务型 Skill 的 Sub-Agent 模型
-  max_turns: 50
-  sub_agent_max_turns: 20                # Sub-Agent 最大对话轮次
-  timeout_s: 300
-
-memory:
-  workspace_dir: "./data/workspace"
-  ctx_dir: "./data/ctx"
-  # NOTE: Python 不展开 ${VAR} 这种 bash 语法，必须填字面值。
-  #   - 本地直跑：host 用 localhost
-  #   - docker compose：host 改为 evopaw-pgvector（compose 服务名）
-  db_dsn: "postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory"
-
-asr:                                       # 语音消息（飞书 audio → Fun-ASR）
-  enabled: true
-  model: "fun-asr-realtime"                # 上线前固定为官方快照号（启动会有别名 WARN 提醒）
-  short_wait_s: 10                         # 转写超此时长触发"语音已收到"回执
-  long_audio_threshold_ms: 15000           # duration 大于此值立即发回执
-  display_transcript: true                 # 回复中是否展示转写文本
-
-debug:
-  enable_test_api: true                    # 本地调试时开启
-  test_api_port: 9090
 ```
 
-完整配置项见 `config.yaml.template`。
+Common environment variables:
 
-### 初始化 Workspace
+| Variable | Required when | Purpose |
+| --- | --- | --- |
+| `FEISHU_APP_ID` | Always | Feishu app ID |
+| `FEISHU_APP_SECRET` | Always | Feishu app secret |
+| `ANTHROPIC_API_KEY` | `anthropic` provider | Anthropic Messages API |
+| `DASHSCOPE_API_KEY` | ASR enabled | DashScope Fun-ASR WebSocket |
+| `QWEN_API_KEY` | DashScope memory roles | DashScope OpenAI-compatible chat and embeddings |
+| `TAVILY_API_KEY` | `tavily_search` Skill | Web search |
+| `MOONSHOT_API_KEY` | Custom Moonshot provider | Example OpenAI-compatible provider |
+| `POSTGRES_PASSWORD` | Docker pgvector override | PostgreSQL password |
 
-`workspace-init/` 目录提供了初始模板：
+`DASHSCOPE_API_KEY` and `QWEN_API_KEY` can usually hold the same DashScope key.
+They are separate names because ASR and OpenAI-compatible memory clients read
+different environment variables.
+
+### Provider Roles
+
+The default role bindings are:
+
+| Role | Default provider | Default model |
+| --- | --- | --- |
+| `main` | `claude_sdk` | `claude-sonnet-4-6` |
+| `subagent` | `claude_sdk` | `claude-haiku-4-5` |
+| `memory_summary` | `dashscope` | `qwen3-turbo` |
+| `memory_embedding` | `dashscope` | `text-embedding-v3` |
+| `memory_extract` | `dashscope` | `qwen3-max` |
+
+You can override providers and models in `config.yaml`:
+
+```yaml
+providers:
+  moonshot:
+    runtime_family: openai_chat
+    api_key_env: MOONSHOT_API_KEY
+    default_api_base: "https://api.moonshot.cn/v1"
+    default_model: "moonshot-v1-32k"
+
+roles:
+  main: { provider: claude_sdk, model: claude-sonnet-4-6 }
+  subagent: { provider: claude_sdk, model: claude-haiku-4-5 }
+  memory_summary: { provider: dashscope, model: qwen3-turbo }
+  memory_embedding: { provider: dashscope, model: text-embedding-v3 }
+  memory_extract: { provider: dashscope, model: qwen3-max }
+```
+
+Current limitation: task-style Skills still run through the Claude SDK Sub-Agent
+path. Keep `roles.subagent` on `claude_sdk` unless you are changing the runtime
+implementation.
+
+## Local Workspace
+
+EvoPaw reads optional bootstrap files from `data/workspace` before each agent
+turn. These files are personal runtime data and are intentionally ignored by Git.
 
 ```bash
 mkdir -p data/workspace
-cp workspace-init/soul.md   data/workspace/soul.md    # Agent 性格与身份
-cp workspace-init/user.md   data/workspace/user.md    # 用户档案
-cp workspace-init/agent.md  data/workspace/agent.md   # 工具规范与能力边界
-cp workspace-init/memory.md data/workspace/memory.md  # 长期记忆索引（初始为空）
+touch data/workspace/soul.md
+touch data/workspace/user.md
+touch data/workspace/agent.md
+touch data/workspace/memory.md
 ```
 
-Bootstrap 阶段（每轮对话开始前）会读取这四个文件注入 system prompt：
-- `soul.md`：性格、原则（完整注入）
-- `user.md`：用户画像、偏好（完整注入）
-- `agent.md`：工具清单与 SOP（完整注入）
-- `memory.md`：记忆索引导航（前 200 行，指向详细记忆文件）
+Bootstrap files:
 
-### 启动
+| File | Purpose |
+| --- | --- |
+| `soul.md` | Assistant identity and tone |
+| `user.md` | User profile, preferences, recurring context |
+| `agent.md` | Local operating rules and tool guidance |
+| `memory.md` | Long-term memory index |
 
-#### 方式一：Docker Compose（推荐）
+If these files are missing, EvoPaw skips the corresponding bootstrap section and
+continues to run.
+
+## Run
+
+### Docker Compose
+
+Docker Compose starts the app and PostgreSQL with pgvector:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-启动两个服务：
-- `evopaw-main`：主应用（Python + Claude Code CLI）
-- `pgvector`：PostgreSQL 16 + pgvector（`schema.sql` 首次启动自动建表）
+When running inside Compose, set `memory.db_dsn` in `config.yaml` to the Compose
+service host:
 
-#### 方式二：手动启动
+```yaml
+memory:
+  db_dsn: "postgresql://evopaw:evopaw123@evopaw-pgvector:5432/evopaw_memory"
+```
 
-先启动 pgvector（可选，不启动则跳过语义记忆）：
+Services:
+
+| Service | Purpose |
+| --- | --- |
+| `evopaw-main` | Python app and agent runtime |
+| `pgvector` | PostgreSQL 16 with pgvector |
+
+### Manual Run
+
+Start only pgvector if you want semantic memory:
 
 ```bash
 docker compose -f pgvector-docker-compose.yaml up -d
 ```
 
-再启动主程序：
+For a manual Python process, keep the database host as `localhost`:
+
+```yaml
+memory:
+  db_dsn: "postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory"
+```
+
+Then start EvoPaw:
 
 ```bash
 python3 -m evopaw.main
 ```
 
-启动后：
-- 飞书 WebSocket 开始监听消息
-- Prometheus 指标：`http://127.0.0.1:9100/metrics`
-- JSON 行日志：`data/logs/evopaw.log`
-- TestAPI（如已启用）：`http://127.0.0.1:9090/api/test/message`
+Runtime endpoints and files:
 
-### 本地调试（TestAPI）
+| Item | Location |
+| --- | --- |
+| Prometheus metrics | `http://127.0.0.1:9100/metrics` |
+| Runtime logs | `data/logs/evopaw.log` |
+| Session data | `data/sessions/` |
+| Context snapshots | `data/ctx/` |
+| Workspace data | `data/workspace/` |
 
-在 `config.yaml` 中设置 `debug.enable_test_api: true`，无需真实飞书环境：
+## Local TestAPI
+
+Enable the TestAPI in `config.yaml`:
+
+```yaml
+debug:
+  enable_test_api: true
+  test_api_host: "127.0.0.1"
+  test_api_port: 9090
+```
+
+Send a local test message:
 
 ```bash
-# 发送消息
 curl -X POST http://127.0.0.1:9090/api/test/message \
   -H "Content-Type: application/json" \
-  -d '{"routing_key": "p2p:ou_test001", "content": "你好"}'
+  -d '{"routing_key": "p2p:ou_test001", "content": "Hello"}'
+```
 
-# 响应示例
-{
-  "msg_id": "test_xxx",
-  "reply": "你好！我是 EvoPaw 工作助手。有什么可以帮助你的吗？",
-  "session_id": "s-uuid-001",
-  "duration_ms": 2345,
-  "skills_called": []
-}
+Clear local test sessions:
 
-# 清空会话
+```bash
 curl -X DELETE http://127.0.0.1:9090/api/test/sessions
 ```
 
-### Slash 命令
+## Slash Commands
 
-| 命令 | 功能 |
-|------|------|
-| `/new` | 创建新会话，之前历史不带入 |
-| `/verbose on/off` | 开启/关闭工具调用过程实时推送 |
-| `/verbose` | 查询详细模式当前状态 |
-| `/status` | 查看当前会话信息 |
-| `/help` | 显示命令帮助 |
+| Command | Description |
+| --- | --- |
+| `/new` | Start a fresh session |
+| `/verbose on` | Stream tool progress to Feishu |
+| `/verbose off` | Stop streaming tool progress |
+| `/verbose` | Show verbose-mode status |
+| `/status` | Show current session details |
+| `/help` | Show command help |
 
-### 三层记忆架构
+## Skills
 
-| 层级 | 存储 | 职责 | 查询方式 |
-|------|------|------|---------|
-| L1 Bootstrap | `/workspace/*.md` | Agent 身份、用户画像、工具规范、记忆索引 | 每轮自动注入 system prompt |
-| L2 Context | `ctx.json` + `raw.jsonl` | 压缩后的对话快照 + 完整审计日志 | 自动恢复到当前 session |
-| L3 Vector | pgvector DB | 历史对话的语义向量 + 全文索引 | `search_memory` Skill 混合搜索 |
+The authoritative Skills list lives in `evopaw/skills/load_skills.yaml`.
 
-### 语音消息
+| Skill | Type | Purpose |
+| --- | --- | --- |
+| `pdf` | task | PDF parsing and text extraction |
+| `docx` | task | Word document handling |
+| `pptx` | task | PowerPoint handling |
+| `xlsx` | task | Excel handling |
+| `feishu_ops` | task | Feishu docs, sheets, bitables, messages, and files |
+| `scheduler_mgr` | task | Scheduled task management |
+| `tavily_search` | task | Internet search through Tavily |
+| `arxiv_search` | task | arXiv search and PDF retrieval |
+| `web_browse` | task | Web content extraction |
+| `history_reader` | reference | Inline paginated conversation history |
+| `memory-save` | task | Save durable memory |
+| `search_memory` | task | Search pgvector-backed memory |
+| `memory-governance` | task | Review and clean memory files |
+| `skill-creator` | task | Turn repeatable workflows into Skills |
+| `daily-summary` | task | Daily work summaries |
+| `investment-report` | task | Investment research reports |
+| `investment-review` | task | Portfolio review |
+| `investment-consult` | task | Investment Q&A |
+| `hk-investment-morning-report` | task | Hong Kong market morning report |
 
-飞书用户发送 audio 消息时，EvoPaw 自动完成「下载 → 转写 → Agent 推理 → 回复」全链路：
+## Memory
 
+| Layer | Storage | Role |
+| --- | --- | --- |
+| L1 Bootstrap | `data/workspace/*.md` | Identity, user profile, operating rules, memory index |
+| L2 Context | `data/ctx/*.json` and `*.jsonl` | Compressed session context and raw audit log |
+| L3 Vector | PostgreSQL + pgvector | Semantic search over historical turns |
+
+If the database or DashScope key is unavailable, EvoPaw can still run; semantic
+memory features degrade instead of blocking the main Feishu flow.
+
+## Voice Messages
+
+When Feishu sends an audio message, EvoPaw can run:
+
+```text
+Feishu audio
+    -> FeishuDownloader
+    -> SpeechRecognitionService
+    -> FunASRRealtimeClient
+    -> Main Agent
+    -> Feishu reply
 ```
-飞书 audio  →  FeishuDownloader  →  SpeechRecognitionService
-                                          │
-                                          ▼
-                            FunASRRealtimeClient (WebSocket)
-                                          │
-                  run-task → 推音频帧 → finish-task → result-generated × N
-                                          │
-                                          ▼
-            (语音转写 + 沙盒音频路径) → Main Agent → "语音转写：…\n\n回答：…"
-```
 
-**关键特性**：
+Key behavior:
 
-- **本地字节流直送**：无需公网 OSS，下载后字节流直接送入 Fun-ASR WebSocket
-- **凭证收敛**：仅一把 `DASHSCOPE_API_KEY`，仅在主进程，不写入 workspace、不暴露给 Skill / Sub-Agent
-- **失败分类文案**：`download` / `ws_connect` / `submit` / `disconnect` / `timeout` / `task_failed` / `empty` 七种 reason 各有用户可见的中文降级文案
-- **混合交互**：短语音同卡片完成；`duration > 15s` 或转写超 `short_wait_s` 时先回执 "语音已收到，正在转写和分析"，后正式回复
-- **重投递去重**：Runner LRU 滚动 256 个最近 `msg_id`，飞书重投递不会触发二次 WebSocket
-- **Prometheus 指标**：`evopaw_asr_requests_total` / `evopaw_asr_latency_seconds` / `evopaw_asr_ws_reconnect_total` / `evopaw_audio_messages_total` / `evopaw_audio_dedup_hits_total` 等
+- Audio bytes are sent directly to the Fun-ASR WebSocket after download.
+- ASR credentials stay in the main process environment.
+- Long or slow audio receives an early acknowledgement before the final reply.
+- Duplicate Feishu message deliveries are deduplicated by recent `msg_id`.
+- ASR metrics are exported through Prometheus.
 
-**预生产工具**：
+Useful tools:
 
 ```bash
-# 审计真实飞书录音的采样率（决定是否需要 ffmpeg 转码到 16kHz）
 python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/
-
-# 用本地 Prometheus 数据校准 short_wait_s / max_wait_s
 python3 scripts/calibrate_thresholds.py
 ```
 
-详细设计与上线 runbook：`docs/superpowers/specs/2026-04-21-feishu-funasr-voice-design.md` 与 `docs/runbooks/voice-pre-production.md`。
+See `docs/runbooks/voice-pre-production.md` for deployment checks.
 
-### 运行测试
+## Testing
+
+Run the full test suite:
 
 ```bash
-# 全量单元测试
+python3 -m pytest
+```
+
+Run only unit tests:
+
+```bash
 python3 -m pytest tests/unit/ -v --cov=evopaw --cov-report=term-missing
+```
 
-# 单个测试文件
-python3 -m pytest tests/unit/test_main_agent.py -v
+Run integration tests that do not require external LLM access:
 
-# 集成测试（无 LLM）
+```bash
 python3 -m pytest tests/integration/ -m "not llm" -v
 ```
 
-**测试统计**（2026-04-25）：599 单元测试 + 6 语音端到端集成测试 + 飞书 mock 集成，0 失败
+Run the voice end-to-end mock test:
 
 ```bash
-# 语音端到端（不依赖外网与 Anthropic API Key，本地 aiohttp WS mock 即可）
 python3 -m pytest tests/integration/test_voice_end_to_end.py -v
 ```
 
-### 技术栈
+## Security and Local-Only Files
 
-| 组件 | 技术 |
-|------|------|
-| Agent 框架 | Claude Agent SDK (`claude-agent-sdk`) |
-| 主 Agent 模型 | Claude Sonnet 4.6 |
-| Sub-Agent 模型 | Claude Haiku 4.5 |
-| 飞书 SDK | `lark-oapi`（WebSocket + REST） |
-| 记忆摘要/向量化 | 通义千问（OpenAI 兼容格式，DashScope） |
-| 语音转写 | 阿里云百炼 Fun-ASR 实时 WebSocket（one-shot，仅 `DASHSCOPE_API_KEY` 一把凭证） |
-| 向量数据库 | PostgreSQL 16 + pgvector |
-| HTTP 框架 | aiohttp |
-| 监控 | Prometheus + `/metrics` 端点 |
-| 容器化 | Docker Compose（evopaw-main + pgvector） |
+The following are intentionally local-only:
 
-更多设计细节见 `docs/` 目录。
+- `.env`
+- `config.yaml`
+- `data/`
+- `tests/logs/`
+- `workspace-init/`
+- `.coverage`, `coverage.json`, `htmlcov/`
+- Python and test caches
+
+Do not commit real Feishu, Anthropic, DashScope, Tavily, database, or provider
+credentials. If a secret was ever committed, rotate it and clean Git history
+instead of only deleting it in a later commit.
+
+## Further Reading
+
+- `config.yaml.template` for all runtime options.
+- `docs/message-flow.md` for message routing details.
+- `docs/design-data.md` for data and memory design.
+- `docs/runbooks/voice-pre-production.md` for ASR rollout checks.

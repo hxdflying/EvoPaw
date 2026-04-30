@@ -1,4 +1,4 @@
--- XiaoPaw 记忆篇（第22课）— pgvector 数据库 schema
+--  pgvector 数据库 schema
 -- 运行前先启动：docker compose -f pgvector-docker-compose.yaml up -d
 -- 💡 核心点：向量只是普通列（vector 类型），和标量字段在同一张表，无需单独向量数据库
 
