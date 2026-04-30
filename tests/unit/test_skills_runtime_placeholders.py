@@ -1,4 +1,4 @@
-"""skills_runtime.placeholders 单元测试（P1-3）。
+"""skills_runtime.placeholders 单元测试。
 
 覆盖：
 - ``${EVOPAW_*}`` 新规约的 8 个占位符替换
@@ -6,7 +6,7 @@
 - 新旧并存时双向替换正确
 - 空 session_id / routing_key 退化为 ``<session_id>`` / ``<routing_key>``
 - ``${EVOPAW_TODAY}`` 时区固定 Asia/Shanghai
-- 替换是字符串级 ``str.replace``，不识别反斜杠转义（基线保护）
+- 替换是字符串级 ``str.replace``，不识别反斜杠转义
 """
 
 from __future__ import annotations

@@ -1,23 +1,9 @@
-"""ResponseFinalizer —— 主 Agent 最终回复改写 pipeline（P0-3）。
+"""ResponseFinalizer —— 主 Agent 最终回复改写 pipeline。
 
-借鉴 Nanobot `finalize_content(ctx, content)` 的「最终回复改写」语义，但与
-`StreamSink` 解耦：
+`ResponseFinalizer` 在 backend 返回 `final_text` 之后、ctx/raw 持久化之前执行，
+用于安全 redact、富文本前置清理、签名等最终响应处理。
 
-- `StreamSink` 只在 verbose 模式下创建，承担「工具事件通知」职责。
-- `ResponseFinalizer` 在 backend 返回 `final_text` 之后、ctx/raw 持久化之前
-  执行，承担「安全 redact、富文本前置清理、签名」等始终需要的最终响应处理。
-
-调用位置：`evopaw/agents/main_agent.py` 中
-1. `result = await backend.run_turn(req)`
-2. `final_text = result.text`
-3. `skills_called = list(result.skills_called)`
-4. **finalizer 在此处接入**
-5. `if not final_text` 判断
-6. `record_skills`、ctx/raw 持久化、pgvector 索引
-
-注：Runner 对语音消息的二次包装（`_format_voice_reply`）在 finalizer 之后执行，
-不在本模块职责内；如需对语音包装后的最终文本做处理，应在 Runner 另设 finalizer，
-不要混用。
+Runner 对语音消息的二次包装在 finalizer 之后执行，不属于本模块职责。
 """
 
 from __future__ import annotations

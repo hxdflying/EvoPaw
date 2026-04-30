@@ -1,18 +1,17 @@
-"""SkillDispatcher —— 三类分发的纯逻辑实现（P3）。
+"""SkillDispatcher —— 跨 backend 共享的 Skill 分发器。
 
-调度规则（与 `tools/skill_loader.py` 中 `skill_loader` @tool 主体行为一致）：
+调度规则：
 
 1. 未知 Skill → 友好错误（含可用列表）
 2. `history_reader` → 内联从 `history_all` 分页读取，不创建 Sub-Agent
 3. reference 型 → 返回 `<skill_instructions>...</skill_instructions>` 包裹的 SKILL.md
 4. task 型 → 调用 `evopaw.agents.skill_agent.run_skill_agent(...)` 触发 Sub-Agent
-   （Sub-Agent 仍走 Claude SDK CLI，参见计划 §5 P3 验收 1.3）
 
 返回类型统一为 `str`：OpenAI 路径直接塞回 `messages` 作为 `role=tool` content，
 SDK MCP adapter 包成 `{"content":[{"type":"text","text":...}]}`。
 
-P2-1：task skill 在 SKILL.md frontmatter 显式声明 `execution.mode: background`
-时走「立即返回 + 后台 spawn + 完成回注」路径。详见 §4 P2-1。
+task skill 在 SKILL.md frontmatter 显式声明 `execution.mode: background` 时，
+走「立即返回 + 后台执行 + 完成后推送」路径。
 """
 
 from __future__ import annotations
@@ -32,9 +31,8 @@ from .registry import _build_skill_registry
 
 logger = logging.getLogger(__name__)
 
-# P2-1：后台任务结果回注 callback。签名固定为 `(task_id, skill_name, result_text) -> None`，
-# 由 main_agent 注入闭包（通常是 sender.send 飞书消息）。callback 内部应自行处理异常，
-# dispatcher 仅做兜底 try/except，避免因下游推送失败影响 task 注销。
+# 后台任务完成后的结果回调，通常由 main_agent 注入 sender.send 闭包。
+# dispatcher 只做兜底异常隔离，避免推送失败影响任务清理。
 ResultCallback = Callable[[str, str, str], Awaitable[None]]
 
 # Skills 目录默认值（与 tools/skill_loader.py 一致）
@@ -123,8 +121,7 @@ class SkillDispatcher:
         self.skills_dir = skills_dir or _SKILLS_DIR
         self.sub_agent_model = sub_agent_model
         self.sub_agent_max_turns = sub_agent_max_turns
-        # P2-1：后台任务完成时通过 callback 回注（通常是 sender.send 飞书消息）；
-        # foreground 路径完全不消费此字段。
+        # 后台任务完成时通过 callback 推送结果；foreground 路径不消费此字段。
         self.result_callback = result_callback
 
         self.registry = _build_skill_registry(self.skills_dir)
@@ -143,7 +140,7 @@ class SkillDispatcher:
     async def dispatch(self, skill_name: str, task_context: Any = "") -> str:
         """业务核心：把 (skill_name, task_context) 映射为字符串结果。
 
-        与 `tools/skill_loader.py` 的 `skill_loader` @tool 主体行为一致。
+        返回值始终是字符串，便于不同 backend 用统一工具结果协议消费。
         """
         ctx_str = _normalize_task_context(task_context)
 
@@ -158,7 +155,7 @@ class SkillDispatcher:
 
         skill_info = self.registry[skill_name]
 
-        # P0-1：依赖 / 平台不满足时硬拦截，不启动 Sub-Agent，也不走 history_reader 内联。
+        # 依赖 / 平台不满足时硬拦截，避免启动必然失败的 Sub-Agent。
         # 旧 registry 没有 available 字段时默认视为可用，保持向后兼容。
         if not skill_info.get("available", True):
             reason = skill_info.get("unavailable_reason", "未知原因")
@@ -183,8 +180,8 @@ class SkillDispatcher:
             self.registry, skill_name, self.session_id,
             self.routing_key, self._instruction_cache,
         )
-        # P3-4：Sub-Agent cwd 固定为 /workspace（容器内路径），与主 Agent 的
-        # session_cwd 设计上不同。理由：
+        # Sub-Agent cwd 固定为 /workspace（容器内路径），与主 Agent 的 session_cwd
+        # 不同。理由：
         #   1. Skill 脚本（pdf/docx/feishu_ops/scheduler_mgr 等）以及 SKILL.md
         #      指令普遍约定相对路径解析自 /workspace（如 .config/feishu.json、
         #      cron/tasks.json、sessions/{sid}/...）；改成 session_cwd 会让
@@ -192,22 +189,17 @@ class SkillDispatcher:
         #   2. Sub-Agent 跨 session 写共享数据（cron/、workspace/.config/）的
         #      场景由 docker-compose 把 workspace_dir 挂载到 /workspace 实现，
         #      session 隔离则由 SKILL.md 内显式拼 sessions/{session_dir}/ 实现。
-        # 如未来要把 cwd 收紧到 session 目录，需要一并 audit 全部 task SKILL.md
-        # 中的相对路径，本轮不动。
         _workspace_root = "/workspace"
 
         # 延迟 import 避免循环（agents.skill_agent → claude SDK；让本模块保持纯逻辑）
         from evopaw.agents.skill_agent import _new_task_id, run_skill_agent  # noqa: PLC0415
 
-        # P1-1：每次 task 分发都生成 8 字符 hex task_id，串到 sub-agent 日志和错误文本。
-        # 不改 dispatch 返回类型（仍是 str），仅作为日志/审计/未来 cancel 的关联键。
+        # 每次 task 分发都生成 task_id，用于日志、错误文本和后台任务取消。
         task_id = _new_task_id()
 
         execution_mode = skill_info.get("execution_mode", "foreground")
 
-        # P2-1：background 路径——立即 spawn 任务，注册到 SubAgentRegistry，
-        # 立即返回 task_id 提示给 LLM；任务完成后通过 result_callback 推送结果
-        # 给用户（不回注 main agent context，避免污染对话历史）。
+        # background 路径：立即注册任务并返回 task_id；完成后通过 callback 推送结果。
         if execution_mode == "background":
             return await self._spawn_background_task(
                 skill_name=skill_name,
@@ -244,7 +236,7 @@ class SkillDispatcher:
         task_id: str,
         run_skill_agent: Any,
     ) -> str:
-        """P2-1：把 task skill 放进后台跑，立即返回 task_id 提示给 LLM。
+        """把 task skill 放进后台运行，立即返回 task_id 提示给 LLM。
 
         - 用 `asyncio.create_task` spawn `_run_and_callback`；
         - 注册到进程级 `SubAgentRegistry`，让 `/stop` 能 cancel；

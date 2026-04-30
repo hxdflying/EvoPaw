@@ -36,8 +36,8 @@ def _build_description_xml(
         from .registry import _extract_frontmatter_description  # 避免循环依赖
 
         desc = _extract_frontmatter_description(content)
-        # P0-1：available / unavailable_reason 让模型看到 skill 存在但当前不可用，
-        # 避免「能力清单瘦身」造成 LLM 误以为根本没这个 skill；dispatcher 仍会硬拦截。
+        # available / unavailable_reason 让模型看到 skill 存在但当前不可用；
+        # dispatcher 仍会在实际调用时硬拦截。
         # 旧 registry 没有 available 字段时按可用处理，保持向后兼容。
         available = info.get("available", True)
         reason = info.get("unavailable_reason", "")
@@ -92,9 +92,9 @@ def _get_skill_instructions(
         else "/workspace/sessions/<session_id>"
     )
 
-    # P1-3：替换新旧占位符（${EVOPAW_*} + {skill_base}/{_skill_base}/{session_id}/
-    # {session_dir}）。${EVOPAW_TODAY}/${EVOPAW_NOW} 在首次渲染时刻冻结，与缓存
-    # 语义一致——dispatcher 实例每轮 turn 重建，不会出现跨日期复用。
+    # 替换新旧占位符（${EVOPAW_*} + {skill_base}/{_skill_base}/{session_id}/
+    # {session_dir}）。${EVOPAW_TODAY}/${EVOPAW_NOW} 在首次渲染时刻冻结；
+    # dispatcher 实例每轮 turn 重建，不会出现跨日期复用。
     stripped = render(
         stripped,
         skill_name=skill_name,

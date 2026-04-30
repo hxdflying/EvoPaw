@@ -16,8 +16,7 @@ bot:
 
 agent:
   # 主 Agent 模型（Claude Sonnet 4.6）
-  # ⚠️ 多 provider 改造 P1：planner_model / sub_agent_model 仍兼容读取，
-  #    但启动时会打 deprecation warning，建议迁移到下方 roles 块。
+  # 兼容旧配置字段；新配置建议使用下方 roles 块。
   planner_model: "claude-sonnet-4-6"
   # Sub-Agent 模型（Claude Haiku 4.5，成本更低）
   sub_agent_model: "claude-haiku-4-5"
@@ -33,10 +32,10 @@ agent:
   # top_p: 0.9
 
 # ──────────────────────────────────────────────────────────────────
-# 多 provider 改造（P1）：可选配置
+# 多 provider 可选配置
 # ──────────────────────────────────────────────────────────────────
 #
-# 不写 providers / roles 块时，行为与改造前完全一致：main / subagent 走 claude_sdk，
+# 不写 providers / roles 块时，main / subagent 走 claude_sdk，
 # memory_summary / memory_embedding / memory_extract 走 dashscope（QWEN_API_KEY）。
 #
 # 【内置 provider，可直接引用，无需在 providers 块中声明】：
@@ -104,7 +103,7 @@ asr:
   #   - fun-asr-realtime-2026-02-28（最新）
   #   - fun-asr-realtime-2025-11-07（别名 fun-asr-realtime 当前指向此版本）
   #   - fun-asr-realtime-2025-09-15
-  #   - fun-asr-flash-8k-realtime-2026-01-28（8kHz 模型，§18.2 方案 A 备选）
+  #   - fun-asr-flash-8k-realtime-2026-01-28（8kHz 模型备选）
   # 实际上线前请到 https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api
   # 复核当时最新发布的快照号，再写入此处。别名值会触发 _warn_if_model_is_alias 启动告警。
   model: "fun-asr-realtime"
@@ -119,7 +118,7 @@ asr:
   short_wait_s: 10                 # 语音转写超过此值触发回执
   long_audio_threshold_ms: 15000   # duration 超过此值立即发回执
   ack_text: "语音已收到，正在转写和分析，请稍候。"
-  # 显示控制（设计文档 §9 / Phase 4 第 5 项）
+  # 回复显示控制
   transcription_title: "语音转写"  # 回复中转写段标题
   answer_title: "回答"             # 回复中回答段标题
   display_transcript: true         # false 时回复仅含 Agent 答复，不展示转写

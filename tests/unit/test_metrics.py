@@ -67,7 +67,7 @@ class TestExportMetrics:
 
 
 class TestRecordLlmToolIteration:
-    """P1-4：HTTP backend 工具循环 iteration 计数 helper。"""
+    """HTTP backend 工具循环 iteration 计数 helper。"""
 
     def _value(self, *, provider_id: str, runtime_family: str, role: str, outcome: str) -> float:
         return llm_tool_iterations_total.labels(

@@ -1,4 +1,4 @@
-"""add_image_tool_local 单元测试（Phase 8：纯函数模块）"""
+"""add_image_tool_local 单元测试。"""
 
 from __future__ import annotations
 

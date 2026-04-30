@@ -1,9 +1,7 @@
-"""Main Agent — 主 Agent 入口（多 provider P2 改造后）
+"""Main Agent — 主 Agent 入口。
 
-P2 之后本模块不再 import `claude_agent_sdk`：所有 LLM runtime 调用走
-`evopaw.agent_backends.get_backend(runtime).run_turn(req)`。
-
-Phase 7 集成的三层记忆（Bootstrap + ctx.json + pgvector）保持原位。
+本模块负责拼装 system prompt、历史上下文、附件内容、Skill 调度入口、
+provider backend 请求，以及会话上下文和语义记忆的写入。
 """
 
 from __future__ import annotations
@@ -120,14 +118,13 @@ def build_agent_fn(
         agent_max_tokens:    通用 generation 参数；HTTP backend 消费，None=backend 默认
         agent_temperature:   通用 generation 参数；HTTP backend 消费，None=不下发
         agent_top_p:         通用 generation 参数；HTTP backend 消费，None=不下发
-        response_finalizer:  最终回复改写器（P0-3）；None 时使用空 Composite，
+        response_finalizer:  最终回复改写器；None 时使用空 Composite，
                              等价于直接返回原 final_text。verbose 关闭时仍执行。
     """
     ctx_dir.mkdir(parents=True, exist_ok=True)
     finalizer: ResponseFinalizer = response_finalizer or CompositeResponseFinalizer()
 
-    # Sub-Agent 模型名以 sub_runtime 为准（runner 仍然把字符串模型名透传给
-    # build_skill_loader_server / run_skill_agent，那两层在 P5/P6 才会改）。
+    # Sub-Agent 模型名以 resolver 产出的 sub_runtime 为准。
     effective_sub_model = sub_runtime.model
 
     async def agent_fn(
@@ -170,9 +167,8 @@ def build_agent_fn(
         text_parts.append(user_message)
         full_message = "\n\n".join(text_parts)
 
-        # 3b. 检测图片附件 + 按 runtime_family 选 content_builder（Claude / Anthropic / OpenAI 各家形态不同）
-        # P1-3：runtime 不支持 vision 时（如通义 OpenAI 兼容端点）降级为纯文本，
-        #       附在消息末尾告知 LLM 图片存在；避免直接构建 image block 让上游 400。
+        # 3b. 检测图片附件，并按 provider schema 构建 content blocks。
+        # 不支持 vision 的 runtime 降级为纯文本提示，避免构建非法 image block。
         builder = pick_content_builder(main_runtime.runtime_family)
         image_b64: str | None = None
         image_mime: str | None = None
@@ -202,9 +198,8 @@ def build_agent_fn(
         session_cwd.mkdir(parents=True, exist_ok=True)
 
         # 5. 按 runtime_family 准备 backend_hints：
-        #    - claude_sdk_compat:    注入 SDK MCP server（与 P2 行为一致）
-        #    - openai_chat / anthropic_messages:
-        #                            注入纯逻辑 SkillDispatcher（backend 直接 await dispatch）
+        #    - claude_sdk_compat: 注入 SDK MCP server。
+        #    - openai_chat / anthropic_messages: 注入纯逻辑 SkillDispatcher。
         backend_hints: dict[str, object] = {}
         if main_runtime.runtime_family == "claude_sdk_compat":
             skill_server = build_skill_loader_server(
@@ -216,8 +211,7 @@ def build_agent_fn(
             )
             backend_hints = {"mcp_servers": {"evopaw": skill_server}}
         elif main_runtime.runtime_family in ("openai_chat", "anthropic_messages"):
-            # P2-1：background 模式 task skill 完成时，把结果通过 sender 推送到当前
-            # routing_key（不回注 main agent context，避免污染对话历史）。
+            # background task skill 完成后直接推送结果，不回注 main agent context。
             # 闭包捕获 sender / routing_key / root_id，dispatcher 自身保持纯逻辑。
             async def _bg_result_callback(
                 task_id: str, skill_name: str, result_text: str,
@@ -334,7 +328,7 @@ def build_agent_fn(
             )
             return "⚠️ Agent 发生内部错误，请稍后重试。"
 
-        # 7a. Response Finalizer pipeline（P0-3）
+        # 7a. Response Finalizer pipeline
         # 在空文本判断之前执行：finalizer 可能把空文本补成默认提示，也可能把非空文本
         # redact 成空（虽然不推荐）；二者都应当被 7b 的空文本检查覆盖。
         # finalizer 本身有 try/except 兜底，CompositeResponseFinalizer 单 finalizer
@@ -361,7 +355,7 @@ def build_agent_fn(
         if not final_text:
             return "⚠️ Claude 未返回有效回复，请重试。"
 
-        # 7b. 上报本轮 skills_called 到 sender（仅 CaptureSender 实现，TestAPI 用）
+        # 上报当前轮次的 skills_called 到 sender（仅 CaptureSender 实现，TestAPI 用）。
         record_skills = getattr(sender, "record_skills", None)
         if record_skills is not None and root_id:
             try:

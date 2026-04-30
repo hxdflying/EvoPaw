@@ -73,10 +73,7 @@ def _build_voice_message(
     transcription_title: str = "语音转写",
     include_audio_path: bool = True,
 ) -> str:
-    """构造语音转写成功后传给 Agent 的增强消息（设计文档 §6.4）.
-
-    ``include_audio_path=False`` 时不暴露沙盒路径，Agent 只看到 transcript。
-    """
+    """构造语音转写成功后传给 Agent 的增强消息。"""
     parts = [
         "用户发送了一条语音消息。\n\n",
         f"{transcription_title}：\n{transcript}",
@@ -100,10 +97,7 @@ def _format_voice_reply(
     answer_title: str = "回答",
     display_transcript: bool = True,
 ) -> str:
-    """格式化语音消息的最终回复（设计文档 §6.5 / §7.3）.
-
-    ``display_transcript=False`` 时退化为纯 Agent 回复（不含转写段，也不带"回答："标题）。
-    """
+    """格式化语音消息的最终回复。"""
     reply_body = agent_reply.strip() if agent_reply else ""
     if not reply_body:
         reply_body = (
@@ -122,15 +116,15 @@ def _format_voice_reply(
 
 _VOICE_AGENT_ERROR_REPLY = "处理出错，请稍后重试。"
 
-# AsrFailure.reason → 用户可见降级文案（设计文档 §12.1-§12.5）
+# AsrFailure.reason → 用户可见降级文案。
 _VOICE_FAILURE_TEXTS: dict[str, str] = {
-    "download": "语音文件下载失败，请重试，或改发文字消息。",          # §12.1
-    "ws_connect": "语音已收到，但转写服务连接失败，请稍后重试。",       # §12.2
-    "submit": "语音已收到，但转写服务连接失败，请稍后重试。",           # §12.2
-    "disconnect": "语音转写中断，请稍后重试，或改发文字消息。",         # §12.3
-    "timeout": "语音转写超时，请稍后重试，或改发文字消息。",            # §12.4
-    "task_failed": "语音转写失败，请重试，或改发文字消息。",            # §12.5
-    "empty": "语音转写失败，请重试，或改发文字消息。",                  # §12.5
+    "download": "语音文件下载失败，请重试，或改发文字消息。",
+    "ws_connect": "语音已收到，但转写服务连接失败，请稍后重试。",
+    "submit": "语音已收到，但转写服务连接失败，请稍后重试。",
+    "disconnect": "语音转写中断，请稍后重试，或改发文字消息。",
+    "timeout": "语音转写超时，请稍后重试，或改发文字消息。",
+    "task_failed": "语音转写失败，请重试，或改发文字消息。",
+    "empty": "语音转写失败，请重试，或改发文字消息。",
 }
 _VOICE_FAILURE_DEFAULT_TEXT = "语音转写失败，请重试，或改发文字消息。"
 _VOICE_ACK_DEFAULT_TEXT = "语音已收到，正在转写和分析，请稍候。"
@@ -164,18 +158,18 @@ class Runner:
         self._speech_service = speech_service
         self._queues: dict[str, asyncio.Queue[InboundMessage]] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
-        # P1-2：当前 routing_key 上正在执行的 _handle() task。/stop 据此 cancel。
+        # 当前 routing_key 上正在执行的 _handle() task。/stop 据此 cancel。
         # 由 _dispatch_lock 保护读写。
         self._active_handles: dict[str, asyncio.Task[None]] = {}
         self._dispatch_lock = asyncio.Lock()
-        # 最近已处理 msg_id 的 LRU 窗口，用于飞书重投递去重（设计文档 §8.1 runner）。
+        # 最近已处理 msg_id 的 LRU 窗口，用于飞书重投递去重。
         self._dedup_window_size = max(0, int(dedup_window_size))
         self._recent_msg_ids: OrderedDict[str, None] = OrderedDict()
-        # 语音回执参数（设计文档 §7.2 / §9）
+        # 语音回执参数。
         self._long_audio_threshold_ms = max(0, int(long_audio_threshold_ms))
         self._short_wait_s = max(0.0, float(short_wait_s))
         self._ack_text = ack_text or _VOICE_ACK_DEFAULT_TEXT
-        # 语音显示参数（设计文档 §9 / Phase 4 第 5 项）
+        # 语音显示参数。
         self._transcription_title = transcription_title or "语音转写"
         self._answer_title = answer_title or "回答"
         self._display_transcript = bool(display_transcript)
@@ -186,9 +180,8 @@ class Runner:
     async def dispatch(self, inbound: InboundMessage) -> None:
         """外部入口：消息入队，确保同一会话串行执行。
 
-        P1-2：`/stop` 走快路径，不入队、不去重、不进 worker；这是慢任务运行
-        时取消能起作用的唯一可靠路径——同一 routing_key 下的普通消息会被串行
-        队列阻塞在 worker 之外，无法及时进入 `_handle_slash()`。
+        `/stop` 走快路径，不入队、不去重、不进 worker；这样慢任务运行时仍能
+        及时取消当前 routing_key 的 active handle。
         """
         if self._is_stop_command(inbound):
             await self._handle_stop(inbound)
@@ -230,8 +223,8 @@ class Runner:
             # 子任务的清理逻辑拖慢；后续单测靠 mock_sender 的 wait_for_message
             # 验证最终状态。
 
-        # P2-1 后台 sub-agent 引入后，这里负责兜底；当前主流程的 sub-agent 由
-        # _handle 调用栈承载，cancel handle 时会沿 await 链一起取消。
+        # 后台 sub-agent 由 registry 兜底取消；前台 sub-agent 会随 active handle
+        # 的 await 链一起取消。
         sub_count = 0
         try:
             from evopaw.agents.sub_agent_registry import get_default_registry  # noqa: PLC0415
@@ -263,8 +256,7 @@ class Runner:
                     key,
                     queue.qsize(),
                 )
-        # P1-2：先 cancel 在跑的 handle，让 sub-agent 沿调用栈尽早退出；再
-        # cancel worker，避免 worker 尚未感知 cancel 时漏掉一个 orphan handle。
+        # 先 cancel 在跑的 handle，让 sub-agent 沿调用栈尽早退出；再 cancel worker。
         for handle in list(self._active_handles.values()):
             if not handle.done():
                 handle.cancel()
@@ -298,8 +290,7 @@ class Runner:
                         ).dec()
                 return
             log_ctx = {"routing_key": key, "feishu_msg_id": inbound.msg_id}
-            # P1-2：把 _handle 包成可 cancel 的 task，注册到 _active_handles，
-            # 让 dispatch 入口的 /stop 快路径能 cancel 当前正在跑的 handle。
+            # 把 _handle 包成可 cancel 的 task，供 /stop 快路径取消。
             handle_task = asyncio.create_task(self._handle(inbound))
             async with self._dispatch_lock:
                 self._active_handles[key] = handle_task
@@ -435,7 +426,7 @@ class Runner:
         # 5. 发送 Loading 卡片（send_thinking），获取 card_msg_id
         card_msg_id = await self._sender.send_thinking(key, inbound.root_id)
 
-        # 6. 执行 Agent；转写已成功时，Agent 异常也要保住 transcript（§12.6）
+        # 6. 执行 Agent；转写已成功时，即使 Agent 失败也保留 transcript。
         try:
             reply = await self._agent_fn(
                 user_content, history, session.id,
@@ -457,7 +448,7 @@ class Runner:
             record_error("runner", "agent_after_asr_failed")
             reply = _VOICE_AGENT_ERROR_REPLY
 
-        # 7. 语音消息：最终回复加 "语音转写 + 回答" 包装（§6.5 / §7.3）
+        # 7. 语音消息：最终回复加 "语音转写 + 回答" 包装。
         final_reply = (
             _format_voice_reply(
                 transcript,
@@ -494,7 +485,7 @@ class Runner:
         routing_key: str,
         root_id: str,
     ):
-        """包 speech_service.transcribe_file，按 §7.2 规则发回执.
+        """包 speech_service.transcribe_file，并在慢转写时发回执。
 
         规则：
         - 飞书消息声明的 ``duration_ms > long_audio_threshold_ms`` → 立即发回执

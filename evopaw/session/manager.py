@@ -173,13 +173,13 @@ class SessionManager:
     async def clear_all(self) -> None:
         """清空所有 session 数据（仅供 TestAPI 在静默期使用）。
 
-        ⚠️ 使用前提（M-2）：调用方需保证当前**没有任何 worker 正在 append**。
+        使用前提：调用方需保证当前**没有任何 worker 正在 append**。
         - 本方法只持有 ``_index_lock``，并不阻塞已经获取了 per-session jsonl_lock 的
           ``append`` 协程。如果在 append 进行中调用，可能产生孤儿 JSONL 文件
           （append 写入磁盘后 jsonl 文件已被删，写入再生成一个新文件）。
         - TestAPI 通过 HTTP 触发本方法，且测试用例都是"先发消息→等回复→clear"的
           串行流程；当前用法是安全的。
-        - 若未来需要在并发场景调用，应先 ``shutdown`` Runner 让 worker 全部退出再调。
+        - 并发场景调用前，应先 ``shutdown`` Runner 让 worker 全部退出再调。
 
         防护：跳过当前**仍被持有**的 jsonl_lock entry（可能正在 append），
         只清理已释放的，避免不一致。

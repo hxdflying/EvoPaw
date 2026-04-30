@@ -120,10 +120,8 @@ def configure_memory_runtime(app_config: Mapping) -> None:
 
     未调用时模块沿用旧行为（env var + DashScope 硬编码端点），保持向后兼容。
 
-    P1-2：memory_summary 当前仅支持 OpenAI-compatible chat completions 端点
-    （`make_openai_client()` 永远返回 OpenAI SDK 实例）。如果 resolver 解析出
-    其它 runtime_family（如 anthropic_messages），运行时必失败——此处显式
-    抛 ResolveError，避免「配置静态合法、运行时必失败」的误导性路径。
+    memory_summary 当前仅支持 OpenAI-compatible chat completions 端点。如果 resolver
+    解析出其它 runtime_family，此处显式抛 ResolveError。
     """
     global _resolved_summary, _SUMMARY_MODEL
     try:
@@ -149,7 +147,7 @@ def configure_memory_runtime(app_config: Mapping) -> None:
 def _make_summary_client():
     """创建摘要用的 LLM client（OpenAI 兼容格式，通义 DashScope 默认）。
 
-    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`（P1-4）。
+    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`。
     """
     return make_openai_client(_resolved_summary)
 

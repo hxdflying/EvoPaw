@@ -1,8 +1,6 @@
-"""AgentBackend 协议层 —— 主 Agent 与具体 LLM runtime 之间的最小公共接口（P2）。
+"""AgentBackend 协议层 —— 主 Agent 与具体 LLM runtime 之间的最小公共接口。
 
-设计原则（参见 docs/multi-provider-final-plan-2026-04-27.md §5 P2 / §7）：
-
-- 本模块只定义协议、Pydantic 模型、异常类，不导入任何 LLM SDK。
+本模块只定义协议、Pydantic 模型、异常类，不导入任何 LLM SDK。
 - `TurnRequest` 是「一次主 Agent 轮次」的快照：runtime / system_prompt /
   user_content / cwd / max_turns / stream_sink / 私有 backend_hints。
   跨 provider 工具描述统一走 `backend_hints`（claude_sdk_compat 用
@@ -93,14 +91,13 @@ class StreamSink(Protocol):
 
 
 # ──────────────────────────────────────────────────────────────────
-# ToolGate —— 受限可变 hook context（P2-2）
+# ToolGate —— 受限工具调用拦截接口
 # ──────────────────────────────────────────────────────────────────
 
 
 class ToolDecision(BaseModel):
     """ToolGate.before_tool_use 的返回值。
 
-    与 Nanobot mutable AgentHookContext 的对比（计划 §4 P2-2）：
     - 仅支持工具调用拦截（allow / block）与输入改写；
     - **不允许** mutate conversation messages（messages 不进入 ToolDecision 字段）；
     - block 时的 `reason` 文本会作为该次 tool_call 的结果回写到 messages，让 LLM
@@ -123,7 +120,7 @@ class ToolDecision(BaseModel):
 
 @runtime_checkable
 class ToolGate(Protocol):
-    """工具调用拦截 / 改写器（P2-2）。
+    """工具调用拦截 / 改写器。
 
     实现规约：
     - **只覆盖工具调用**：HTTP backend 在 dispatcher.dispatch(name, args) 之前调用，
@@ -131,7 +128,7 @@ class ToolGate(Protocol):
     - **block 必须有审计**：backend 在 block 路径上记 warning 日志 + 计数器；
       gate 本身只描述决策，不负责记录。
     - **异常被吞**：实现抛错时 backend 视为 allow，避免 gate bug 卡死主流程。
-    - **不改 messages**：返回值无 messages 字段，按计划 §4 P2-2 的风险边界。
+    - **不改 messages**：返回值无 messages 字段，避免拦截器直接改写对话历史。
     """
 
     async def before_tool_use(
@@ -152,8 +149,7 @@ class TurnRequest(BaseModel):
     role: str = Field(..., description="角色名，如 'main' / 'subagent'")
     runtime: ResolvedRuntime
     system_prompt: str
-    # user_content 同时支持纯字符串与多模态 block 列表（与 Claude SDK 现有形态对齐）。
-    # 第一阶段不强制 ContentPart 化，避免 P2 阶段大改 main_agent 的多模态拼装代码。
+    # user_content 同时支持纯字符串与多模态 block 列表。
     user_content: str | list[dict]
     cwd: str
     max_turns: int = 50
@@ -165,7 +161,7 @@ class TurnRequest(BaseModel):
             "claude_sdk_compat backend 由 SDK 自管，不消费此字段。"
         ),
     )
-    # 通用 generation 参数（P2-1）：HTTP backend (openai_chat / anthropic_messages) 直接消费；
+    # 通用 generation 参数：HTTP backend (openai_chat / anthropic_messages) 直接消费；
     # claude_sdk_compat 由 SDK 自管，不消费这些字段。None 表示走 backend 内的默认值
     # （Anthropic Messages 必填 max_tokens，缺省时 backend 内回退到 4096）。
     max_tokens: int | None = Field(
@@ -191,7 +187,7 @@ class TurnRequest(BaseModel):
     tool_gate: ToolGate | None = Field(
         default=None,
         description=(
-            "P2-2：工具调用拦截 / 改写器；HTTP backend 在 dispatch 前调用。"
+            "工具调用拦截 / 改写器；HTTP backend 在 dispatch 前调用。"
             "claude_sdk_compat backend 不消费此字段（SDK 自管工具调用）。"
         ),
     )

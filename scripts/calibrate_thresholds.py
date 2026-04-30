@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""阈值校准工具（设计文档 §17.4 Phase 4 步骤 B）.
+"""ASR 回执阈值校准工具。
 
 从 EvoPaw 自身暴露的 Prometheus endpoint 拉取 ``evopaw_asr_latency_seconds``
 直方图与 ``evopaw_asr_requests_total`` 计数，估算 P50 / P80 / P95，给出
@@ -190,7 +190,7 @@ def _format_status_breakdown(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="阈值校准（§17.4 Phase 4 步骤 B）",
+        description="根据 Prometheus ASR 指标校准回执阈值",
     )
     parser.add_argument(
         "--url",

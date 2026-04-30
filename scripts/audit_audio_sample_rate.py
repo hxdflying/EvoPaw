@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""审计飞书语音样本的采样率与编码（设计文档 §18.2 / Phase 4 第 1 项）.
+"""审计飞书语音样本的采样率与编码。
 
 用途
 ----
-当真实飞书 OPUS 录音可用时，对一批样本做批量探测，决定 §18.2 的降级路线：
+当真实飞书 OPUS 录音可用时，对一批样本做批量探测，辅助选择 ASR 配置：
 
 - 方案 A：所有样本都是 16kHz → 沿用 ``fun-asr-realtime``，不动
 - 方案 A：所有样本都是 8kHz → 切到 ``fun-asr-flash-8k-realtime``
@@ -124,7 +124,7 @@ def _collect_files(inputs: list[Path]) -> list[Path]:
 
 
 def _recommend(results: list[ProbeResult]) -> str:
-    """根据实测分布给出 §18.2 方案建议."""
+    """根据实测分布给出 ASR 采样率配置建议."""
     rates = [r.sample_rate for r in results if r.sample_rate is not None]
     if not rates:
         return "推荐：暂无可用样本，无法判定。先确认 ffprobe 安装与样本路径。"
@@ -154,7 +154,7 @@ def _recommend(results: list[ProbeResult]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="批量审计飞书 OPUS 样本采样率（§18.2 决策辅助）",
+        description="批量审计飞书 OPUS 样本采样率",
     )
     parser.add_argument(
         "paths",

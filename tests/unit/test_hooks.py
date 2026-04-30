@@ -101,7 +101,7 @@ class TestCallbackExceptionSwallowed:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P0-2：CompositeStreamSink
+# CompositeStreamSink
 # ──────────────────────────────────────────────────────────────────
 
 

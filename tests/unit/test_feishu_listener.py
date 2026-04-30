@@ -243,7 +243,7 @@ class TestFeishuListenerExtractAttachment:
         assert result.duration_ms is None
 
     def test_audio_without_duration_sets_none(self):
-        """飞书 audio 消息 content 可能不带 duration 字段（§3.1 指出契约未稳定保证）."""
+        """飞书 audio 消息 content 可能不带 duration 字段。"""
         content = json.dumps({"file_key": "audio_003"})
         result = FeishuListener._extract_attachment("audio", content)
         assert result is not None

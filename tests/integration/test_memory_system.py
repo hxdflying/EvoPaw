@@ -1,12 +1,7 @@
-"""第22课系统测试：三层记忆能力端到端验证
+"""三层记忆能力端到端验证。
 
-对应课程案例（草稿_22_EvoPaw记忆篇_课程草稿.md）：
-  P1  回顾：EvoPaw 的记忆缺陷（Bootstrap 注入验证）
-  P2  Case 1：SOP 已在记忆里（skill-creator）
-  P3  Case 2：阿里该不该挂单（search_memory 协同 workspace）
-  P4  产品化第一步：初始引导触发
-  P5  技能调教：SOP → Skill
-  P6  按需触发记忆搜索
+覆盖 Bootstrap 注入、session 短期记忆、workspace 文件记忆、pgvector
+搜索记忆与 skill-creator 触发路径。
 
 运行方式：
   # Group P/Q/T (仅 LLM，无需 pgvector)
@@ -233,7 +228,7 @@ class TestContextPersistence:
 # ─────────────────────────────────────────────────────────────────────────────
 # Group R: 文件记忆层（L20 - memory-save / skill-creator）
 # 验证 Agent 主动写入 workspace 文件的能力
-# 对应课程 P2/P5：SOP 沉淀为 Skill；P3：workspace 文件和搜索层协同
+# 验证 SOP 沉淀为 Skill，以及 workspace 文件和搜索层协同。
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -302,7 +297,6 @@ class TestFileMemoryLayer:
     ):
         """用户描述 SOP 并要求保存为技能，Agent 应调用 skill-creator。
 
-        课程对应 P5/P2：
         「用户描述早报 SOP → EvoPaw 调用 skill-creator → investment-report/SKILL.md」
         此测试使用简化版 SOP（避免依赖投资数据），验证 skill-creator 触发确认。
         """
@@ -333,7 +327,7 @@ class TestFileMemoryLayer:
 # ─────────────────────────────────────────────────────────────────────────────
 # Group S: 搜索记忆层（L21 - pgvector 向量数据库）
 # 验证每轮对话写入 pgvector、search_memory 能检索历史
-# 对应课程 P3/P6：「阿里该不该挂单」「根据上周五的分析复盘」
+# 覆盖「阿里该不该挂单」「根据上周五的分析复盘」这类搜索记忆场景。
 # ─────────────────────────────────────────────────────────────────────────────
 
 

@@ -199,7 +199,7 @@ class TestDispatchTaskContextNormalization:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P1-1：dispatcher 透传 8 字符 hex task_id 给 run_skill_agent
+# dispatcher 透传 8 字符 hex task_id 给 run_skill_agent
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -219,7 +219,7 @@ class TestDispatchTaskId:
 
     @pytest.mark.asyncio
     async def test_dispatch_returns_str(self, tmp_skills_dir: Path):
-        """P1-1 不变量：dispatch 必须返回 str（三个 backend 工具结果契约）。"""
+        """dispatch 必须返回 str（三个 backend 工具结果契约）。"""
         d = SkillDispatcher(session_id="sid", skills_dir=tmp_skills_dir)
         mock_agent = AsyncMock(return_value="子 Agent 文本")
         with patch(
@@ -247,7 +247,7 @@ class TestDispatchTaskId:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P0-1：unavailable skill 守卫 + description XML 标记
+# unavailable skill 守卫 + description XML 标记
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -328,7 +328,7 @@ class TestDispatchUnavailable:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P2-1：background 模式 task skill —— 立即返回 + 后台 spawn + callback 回注
+# background 模式 task skill —— 立即返回 + 后台 spawn + callback 回注
 # ──────────────────────────────────────────────────────────────────
 
 

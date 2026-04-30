@@ -9,7 +9,7 @@ services:
       # Kimi / Moonshot AI 凭证（providers.kimi）
       - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
-      # Fun-ASR / 百炼凭证（§9.2 Secrets Policy：仅在主进程环境，不写入 config.yaml）
+      # Fun-ASR / 百炼凭证：仅在主进程环境中读取，不写入 config.yaml。
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       # memory 系列默认走 DashScope，缺此 key 时启动 warn 后降级（不阻塞主链路）
       - QWEN_API_KEY=${QWEN_API_KEY:-}

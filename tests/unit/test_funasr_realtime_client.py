@@ -1,4 +1,4 @@
-"""FunASRRealtimeClient 单元测试（覆盖设计文档 §16.1.4）."""
+"""FunASRRealtimeClient 单元测试。"""
 
 from __future__ import annotations
 
@@ -295,7 +295,7 @@ class TestFailureAndTimeout:
         with pytest.raises(AsrFailure) as excinfo:
             await client.transcribe(b"abcdefgh")
         assert excinfo.value.reason == "timeout"
-        # 终态必须关闭 ws（设计文档 §18.4）
+        # 终态必须关闭 ws。
         assert session.ws.closed is True
 
     async def test_ws_connect_failure_raises_ws_connect(self):
@@ -347,7 +347,7 @@ class TestLifecycle:
 
 
 class TestRetry:
-    """max_reconnect_retries 语义（设计文档 §9 / §12.2 / §12.3）."""
+    """max_reconnect_retries 语义。"""
 
     async def test_retry_on_ws_connect_then_success(self):
         """第一次握手失败、第二次成功 → 返回成功结果."""

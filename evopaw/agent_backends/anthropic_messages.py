@@ -1,6 +1,6 @@
-"""AnthropicMessagesBackend —— P4 落地：直连 Anthropic Messages API。
+"""AnthropicMessagesBackend —— 直连 Anthropic Messages API。
 
-和 P3 的 `OpenAIChatBackend` 是一对镜像实现，差异点（来自计划文档 §5 P4 / 风险表）：
+和 `OpenAIChatBackend` 是一对镜像实现，主要差异如下：
 
 1. **HTTP 协议**：
    - 端点：`{api_base}/v1/messages`
@@ -26,9 +26,9 @@
    文案与 ClaudeSDKCompatBackend / OpenAIChatBackend 字节级一致。
 
 7. **extra_body 白名单**：与 OpenAI 路径同样的防御性过滤——既允许 provider-specific
-   字段（白名单已在 P1 ProviderSpec 校验），也防止 `model / messages / system / tools`
+   字段（白名单已在 ProviderSpec 校验），也防止 `model / messages / system / tools`
    等通用字段被覆盖。通用 generation 参数（`max_tokens` / `temperature` / `top_p`）
-   走 `TurnRequest` 的 first-class 字段（P2-1），不再通过 `extra_body` 注入；
+   走 `TurnRequest` 字段，不再通过 `extra_body` 注入；
    `max_tokens` 在 `TurnRequest.max_tokens=None` 时回退到 `_DEFAULT_MAX_TOKENS=4096`。
 
 模块级 import `httpx`，便于单测 patch `evopaw.agent_backends.anthropic_messages.httpx.AsyncClient`。
@@ -130,7 +130,7 @@ def _build_request_body(
     messages: list[dict],
     tools: list[dict] | None,
 ) -> dict:
-    # P2-1：max_tokens Anthropic API 必填，TurnRequest 未指定时回退默认。
+    # max_tokens 是 Anthropic API 必填字段；TurnRequest 未指定时回退默认。
     body: dict[str, Any] = {
         "model": req.runtime.model,
         "max_tokens": req.max_tokens if req.max_tokens is not None else _DEFAULT_MAX_TOKENS,
@@ -263,7 +263,7 @@ class AnthropicMessagesBackend(_HttpChatBackendBase):
                     ]
 
                     if tool_use_blocks and stop_reason in ("tool_use", None):
-                        # P1-4：本轮命中 tool_use，记 continue。
+                        # 当前响应命中 tool_use，继续工具循环。
                         record_llm_tool_iteration(
                             req.runtime.provider_id,
                             req.runtime.runtime_family,
@@ -279,7 +279,7 @@ class AnthropicMessagesBackend(_HttpChatBackendBase):
                             name = tu.get("name") or "unknown"
                             args = _normalize_tool_input(tu.get("input"))
 
-                            # P2-2：dispatch 前请求 tool_gate 决策。
+                            # dispatch 前请求 tool_gate 决策。
                             decision = await _consult_tool_gate(req, name, args)
                             if decision.action == "block":
                                 logger.warning(
@@ -350,8 +350,7 @@ class AnthropicMessagesBackend(_HttpChatBackendBase):
                         messages.append({"role": "user", "content": tool_result_blocks})
                         continue
 
-                    # stop_reason == 'end_turn' / 'stop_sequence' / 'max_tokens' —— 收尾
-                    # P1-4：本轮没有 tool_use，记 final。
+                    # stop_reason == 'end_turn' / 'stop_sequence' / 'max_tokens' —— 收尾。
                     record_llm_tool_iteration(
                         req.runtime.provider_id,
                         req.runtime.runtime_family,
@@ -361,7 +360,7 @@ class AnthropicMessagesBackend(_HttpChatBackendBase):
                     final_text = _extract_text_from_blocks(blocks)
                     break
                 else:
-                    # P2-5：循环耗尽未 break，说明每轮都在 tool_use 上递归。
+                    # 循环耗尽未 break，说明每轮都在 tool_use 上递归。
                     raise ProviderMaxTurnsExceeded(
                         f"工具调用循环达到 max_turns={req.max_turns} 仍未收敛。"
                     )

@@ -68,7 +68,7 @@ errors_total = Counter(
 )
 
 
-# ── ASR / Voice 指标（设计文档 §15）────────────────────────────────
+# ── ASR / Voice 指标 ─────────────────────────────────────────────
 
 asr_requests_total = Counter(
     "evopaw_asr_requests_total",
@@ -114,11 +114,7 @@ audio_dedup_hits_total = Counter(
 )
 
 
-# ── LLM Provider Runtime 指标（多 provider 改造 P1）────────────────
-#
-# 指标暂时仅声明、不计数（计数在 P2 接入 backend 后落实）。提前定义指标的目的：
-#   1. 让运维 / Grafana 可以基于 label 名提前接好告警面板。
-#   2. 在 P1 验收时即可通过 /metrics 看到指标存在（labels 还没 emit）。
+# ── LLM Provider Runtime 指标 ────────────────────────────────────
 
 llm_calls_total = Counter(
     "evopaw_llm_calls_total",
@@ -148,12 +144,12 @@ llm_latency_seconds = Histogram(
     registry=REGISTRY,
 )
 
-# P1-4：HTTP backend 工具循环 iteration 计数。
+# HTTP backend 工具循环 iteration 计数。
 # 仅在 openai_chat / anthropic_messages 这两类「手写工具循环」的 backend 中递增，
 # claude_sdk_compat 由 SDK 驱动循环，本指标对其不发出（这是测试硬保护的不变量）。
 # outcome ∈ {"continue", "final"}：
-#   - continue: 本轮命中 tool_calls，进入下一轮请求。
-#   - final:    本轮收到终止 finish_reason / stop_reason，函数返回 final text。
+#   - continue: 当前响应命中 tool_calls，进入下一轮请求。
+#   - final:    当前响应收到终止 finish_reason / stop_reason，函数返回 final text。
 # max_turns 耗尽场景不会触发 final（直接抛 ProviderMaxTurnsExceeded），通过既有
 # llm_calls_total{outcome="max_turns_exceeded"} 体现，不在本指标中重复打点。
 llm_tool_iterations_total = Counter(
@@ -198,7 +194,7 @@ def record_llm_call(
     output_tokens: int = 0,
     latency_seconds: float | None = None,
 ) -> None:
-    """记录一次 LLM 调用结果；P1 仅声明 API，调用点在 P2 接入 backend 后接通。
+    """记录一次 LLM 调用结果。
 
     outcome ∈ {"success", "error", "rate_limited", "auth_error", "transient"}。
     """
@@ -273,4 +269,3 @@ def export_metrics() -> tuple[bytes, str]:
     """Return Prometheus metrics payload and content type."""
     data = generate_latest(REGISTRY)
     return data, CONTENT_TYPE_LATEST
-

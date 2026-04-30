@@ -85,7 +85,7 @@ class TestCaptureSender:
 
 
 class TestRecordSkills:
-    """record_skills / pop_skills: TestAPI 用于读取本轮触发的 Skill 列表"""
+    """record_skills / pop_skills: TestAPI 用于读取当前轮次触发的 Skill 列表。"""
 
     async def test_record_then_pop(self):
         """record_skills 后 pop_skills 取出列表"""

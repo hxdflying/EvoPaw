@@ -180,7 +180,7 @@ class CronService:
             self._last_mtime = st.st_mtime
             self._last_size = st.st_size
             data = json.loads(self._tasks_path.read_text())
-            # 💡 兼容旧格式（直接是 list）和新格式（{"jobs": [...]}）
+            # 兼容旧格式（直接是 list）和新格式（{"jobs": [...]}）
             if isinstance(data, list):
                 jobs_raw = data
             else:

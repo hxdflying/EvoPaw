@@ -1,4 +1,4 @@
-"""skills_runtime.registry 单元测试（P0-1）。
+"""skills_runtime.registry 单元测试。
 
 覆盖：
 
@@ -6,7 +6,7 @@
 - requires.bins / env / files 缺失时 available=False，原因人类可读
 - platforms 不匹配时 available=False
 - 缺省 frontmatter（无 requires/platforms）保持向后兼容（available=True）
-- 路径穿越防护（沿用 Phase 6 行为）
+- 路径穿越防护
 - load_skills.yaml 缺失或解析失败返回空 dict
 """
 
@@ -371,7 +371,7 @@ class TestBuildRegistry:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P2-1：execution.mode 解析
+# execution.mode 解析
 # ──────────────────────────────────────────────────────────────────
 
 

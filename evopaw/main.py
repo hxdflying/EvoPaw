@@ -45,19 +45,17 @@ from evopaw.session.manager import SessionManager
 logger = logging.getLogger(__name__)
 
 
-# Fun-ASR 不带快照号的稳定别名集合（设计文档 §9.1：上线前应固定为快照号）
+# Fun-ASR 不带快照号的稳定别名集合；生产环境建议固定到快照版本。
 _ASR_MODEL_ALIASES = frozenset({"fun-asr-realtime", "fun-asr-flash-8k-realtime"})
 
 
 def _warn_if_model_is_alias(model: str) -> None:
-    """模型名为稳定别名时发警告，提醒生产固定为快照号（§9.1 / Phase 4 第 3 项）.
+    """模型名为稳定别名时发警告；开发联调允许继续使用别名。"""
 
-    本函数只打日志，不阻断启动；测试环境/开发联调允许继续使用别名。
-    """
     if model in _ASR_MODEL_ALIASES:
         logger.warning(
             "ASR model='%s' 是稳定别名，生产建议固定为快照号（如 "
-            "fun-asr-realtime-2025-11-07），见设计文档 §9.1。",
+            "fun-asr-realtime-2025-11-07）。",
             model,
         )
 
@@ -104,21 +102,19 @@ def _load_config(config_path: Path) -> dict:
 
 
 def _validate_subagent_runtime(sub_runtime) -> None:
-    """启动期校验 Sub-Agent runtime（P1-1 修复）。
+    """启动期校验 Sub-Agent runtime。
 
     task 型 Skill 的执行路径仍是 `SkillDispatcher.dispatch → run_skill_agent
-    → claude_agent_sdk.query`，与主 Agent runtime 解耦。如果用户把
-    `roles.subagent` 切到非 claude_sdk_compat，启动期就显式拒绝，避免 CLI
-    检查跳过却在第一次 task skill 调用时才暴露错误。
-
-    跨 provider Sub-Agent 列入 P6，待真正落地后放开。
+    → claude_agent_sdk.query`，因此 `roles.subagent` 当前必须使用
+    `claude_sdk_compat`。启动期显式拒绝不兼容配置，避免第一次调用 task skill
+    时才暴露错误。
     """
     if sub_runtime.runtime_family != "claude_sdk_compat":
         raise RuntimeError(
             f"roles.subagent 必须使用 claude_sdk_compat runtime（当前解析为 "
             f"provider={sub_runtime.provider_id} family={sub_runtime.runtime_family}）。"
             "task 类型 Skill 的 Sub-Agent 仍依赖 Claude Agent SDK；跨 provider Sub-Agent "
-            "为 P6 计划项，未落地。"
+            "尚未支持。"
         )
 
 
@@ -153,7 +149,7 @@ async def async_main() -> None:
 
     logger.info("EvoPaw starting. data_dir=%s", data_dir)
 
-    # ── 2. 解析主 / 子 Agent runtime（多 provider P1）─────────────────────
+    # ── 2. 解析主 / 子 Agent runtime ──────────────────────────────────────
     try:
         main_runtime = resolve_runtime("main", cfg)
         sub_runtime  = resolve_runtime("subagent", cfg)
@@ -162,9 +158,7 @@ async def async_main() -> None:
 
     _validate_subagent_runtime(sub_runtime)
 
-    # main / subagent 至少一者解析为 claude_sdk_compat 时才需 Claude CLI；
-    # 由于 sub 已强制为 claude_sdk_compat（见上），这里几乎总是 True，但仍保留判断
-    # 以便未来 P6 解锁后逻辑仍正确。
+    # 只要任一角色使用 claude_sdk_compat，就需要可用的 Claude Code CLI。
     needs_claude_cli = (
         main_runtime.runtime_family == "claude_sdk_compat"
         or sub_runtime.runtime_family == "claude_sdk_compat"
@@ -184,7 +178,7 @@ async def async_main() -> None:
             sub_runtime.provider_id, sub_runtime.runtime_family,
         )
 
-    # ── 2b. 配置 memory 模块的 provider runtime（resolver 注入）──────────
+    # ── 2b. 配置 memory 模块的 provider runtime ──────────────────────────
     _cfg_summary_runtime(cfg)
     _cfg_index_runtime(cfg)
 
@@ -210,16 +204,12 @@ async def async_main() -> None:
     test_api_port = debug_cfg.get("test_api_port", 9090)
 
     agent_cfg = cfg.get("agent", {})
-    # main / subagent 模型一律走 resolver 拿（main_runtime.model / sub_runtime.model）；
-    # 旧字段 agent.planner_model / agent.sub_agent_model 在 resolver 内部以 deprecation
-    # warning 形式兼容，新代码不再直接读取。
+    # main / subagent 模型统一由 resolver 解析，旧 agent.* 字段只在 resolver 内兼容。
     agent_max_turns = agent_cfg.get("max_turns", 50)
     sub_agent_max_turns = agent_cfg.get("sub_agent_max_turns", 20)
-    # P2-4：HTTP backend (openai_chat / anthropic_messages) 透传单次请求超时；
-    # claude_sdk_compat 由 Claude Agent SDK 自管，此参数不消费。
+    # HTTP backend 消费请求超时；claude_sdk_compat 由 Claude Agent SDK 自行管理。
     agent_timeout_s = float(agent_cfg.get("timeout_s", 120.0))
-    # P2-1：通用 generation 参数（HTTP backend 消费；claude_sdk_compat 不消费）。
-    # 缺省（None）时 backend 走自身默认（Anthropic Messages 用 4096，OpenAI 不下发）。
+    # 通用 generation 参数仅由 HTTP backend 消费；None 表示使用 provider 默认。
     agent_max_tokens = agent_cfg.get("max_tokens")
     if agent_max_tokens is not None:
         agent_max_tokens = int(agent_max_tokens)
@@ -352,7 +342,7 @@ async def async_main() -> None:
         from evopaw.api.capture_sender import CaptureSender  # noqa: PLC0415
         from evopaw.api.test_server import create_test_app  # noqa: PLC0415
 
-        # 💡 核心点：test runner 使用 CaptureSender，拦截 agent 回复供 HTTP 同步返回
+        # TestAPI 使用 CaptureSender 截获 agent 回复，供 HTTP 请求同步返回。
         capture_sender = CaptureSender()
         test_runner = _make_runner(sender=capture_sender)
         test_app = create_test_app(

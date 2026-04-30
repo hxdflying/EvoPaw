@@ -515,7 +515,7 @@ class TestMetricsRecording:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P1-4：claude_sdk_compat 不发出 iteration metric（轮次由 SDK 驱动）
+# claude_sdk_compat 不发出 iteration metric（轮次由 SDK 驱动）
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -555,12 +555,12 @@ class TestNoIterationMetricForSDK:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P2-2：ToolGate 仅在 HTTP backend 接入；claude_sdk_compat 不消费
+# ToolGate 仅在 HTTP backend 接入；claude_sdk_compat 不消费
 # ──────────────────────────────────────────────────────────────────
 
 
 class TestNoToolGateForSDK:
-    """计划 P2-2 风险边界：仅 HTTP backend 接入 ToolGate。
+    """仅 HTTP backend 接入 ToolGate。
     Claude SDK backend 自管工具调用，不读取 req.tool_gate。"""
 
     def test_module_does_not_reference_tool_gate(self):

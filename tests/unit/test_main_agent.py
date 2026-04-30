@@ -1,7 +1,7 @@
 """main_agent 单元测试
 
-P2 改造后：本文件不再 import `claude_agent_sdk`，所有测试 patch
-`evopaw.agents.main_agent.get_backend` 注入一个 FakeBackend，验证
+本文件不直接 import `claude_agent_sdk`，所有测试 patch
+`evopaw.agents.main_agent.get_backend` 注入 FakeBackend，验证
 `build_agent_fn` 的输入装配（system prompt / user_content / cwd /
 stream_sink / backend_hints）与输出消化（skills_called / 持久化 /
 async_index_turn）行为。
@@ -37,7 +37,7 @@ from evopaw.provider_runtime import ResolvedRuntime
 from evopaw.session.models import MessageEntry
 
 
-# 默认 ResolvedRuntime（claude_sdk_compat 等价于改造前的隐式默认）。
+# 默认 ResolvedRuntime。
 # 测试 patch 了 get_backend，所以 model 名只是占位，不会真发请求。
 _DEFAULT_MAIN_RUNTIME = ResolvedRuntime(
     role="main",
@@ -493,7 +493,7 @@ class TestBuildAgentFn:
 
 
 class TestRuntimeFamilyDispatch:
-    """P4 验收：claude_sdk_compat / openai_chat / anthropic_messages 三族
+    """claude_sdk_compat / openai_chat / anthropic_messages 三族
     应分别走不同的 backend_hints + content_builder 路径。"""
 
     @pytest.mark.asyncio
@@ -578,7 +578,7 @@ class TestRuntimeFamilyDispatch:
 
     @pytest.mark.asyncio
     async def test_http_backend_dispatcher_has_bg_result_callback(self, tmp_path):
-        """P2-1：HTTP backend 路径下 dispatcher 必须带 result_callback；
+        """HTTP backend 路径下 dispatcher 必须带 result_callback；
         触发 callback 后应通过 sender.send 把后台结果推送到当前 routing_key。"""
         from evopaw.provider_runtime import ResolvedRuntime
         from evopaw.skills_runtime.dispatcher import SkillDispatcher
@@ -624,7 +624,7 @@ class TestRuntimeFamilyDispatch:
 
     @pytest.mark.asyncio
     async def test_bg_result_callback_swallows_sender_exception(self, tmp_path):
-        """P2-1：sender.send 抛错不应往上冒到 dispatcher。"""
+        """sender.send 抛错不应往上冒到 dispatcher。"""
         from evopaw.provider_runtime import ResolvedRuntime
 
         sender = MagicMock()
@@ -738,7 +738,7 @@ class TestRuntimeFamilyDispatch:
 
     @pytest.mark.asyncio
     async def test_runtime_without_vision_drops_image_to_text(self, tmp_path):
-        """P1-3：runtime.supports_vision=False 时不调用 load_image_data，并在 user_content 末尾追加文字提示。"""
+        """runtime.supports_vision=False 时不调用 load_image_data，并在 user_content 末尾追加文字提示。"""
         from evopaw.provider_runtime import ResolvedRuntime
 
         sender = MagicMock()
@@ -1068,7 +1068,7 @@ class TestSkillsCalled:
 
 
 # ──────────────────────────────────────────────────────────────────
-# P0-3：Response Finalizer pipeline
+# Response Finalizer pipeline
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -1246,7 +1246,7 @@ class TestResponseFinalizer:
 def test_no_direct_sdk_import_in_this_file():
     """grep 校验：tests/unit/test_main_agent.py 中不能出现 `import claude_agent_sdk`。
 
-    P2 验收门槛之一：主 Agent 的单测层不再耦合 SDK。
+    主 Agent 的单测层不直接耦合 SDK。
     """
     src = Path(__file__).read_text(encoding="utf-8")
     # 允许字符串里出现「claude_agent_sdk」（如本测试自身的解释文本），

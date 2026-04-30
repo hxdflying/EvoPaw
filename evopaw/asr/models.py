@@ -1,7 +1,4 @@
-"""ASR 数据契约.
-
-对应设计文档 §10.2 / §10.3。本模块只定义纯数据类，不包含任何 I/O。
-"""
+"""ASR 数据契约。本模块只定义纯数据类，不包含任何 I/O。"""
 
 from __future__ import annotations
 
@@ -27,7 +24,7 @@ class AsrResult:
 class AsrFailure(Exception):
     """一次 one-shot 转写的标准化失败.
 
-    reason 取值固定为下列之一（与设计文档 §12 一致）::
+    reason 取值固定为下列之一::
 
         "download"      — 本地音频不可读（由上层 service 分类）
         "ws_connect"    — WebSocket 握手失败

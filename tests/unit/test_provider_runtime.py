@@ -1,4 +1,4 @@
-"""provider_runtime 单元测试（多 provider 改造 P1）
+"""provider_runtime 单元测试。
 
 覆盖：
   - registry 加载 / 校验 / 合并
@@ -169,7 +169,7 @@ class TestCapabilities:
             assert supports_tool_calls(DEFAULT_PROVIDERS[name]) is True
 
     def test_vision_explicit_true_overrides_family_default(self):
-        # P1-3 修复：openai_chat family default vision=False，
+        # openai_chat family default vision=False，
         # 但 ProviderSpec.supports_vision=True 应显式覆盖。
         spec = ProviderSpec(
             provider_id="custom-vision",
@@ -248,7 +248,7 @@ class TestResolverPriority:
         assert rt.model == "qwen3-turbo-cfg"
 
     def test_memory_embedding_default_is_role_embedding_model(self):
-        # P0-1 修复：memory_embedding 默认必须是 embedding 模型，不是 chat 模型。
+        # memory_embedding 默认必须是 embedding 模型，不是 chat 模型。
         rt = resolve_runtime("memory_embedding", {})
         assert rt.provider_id == "dashscope"
         assert rt.model == "text-embedding-v3"
@@ -274,7 +274,7 @@ class TestResolverPriority:
         assert rt.model == "claude-haiku-4-5"
 
     def test_switching_provider_uses_provider_default_not_legacy_claude(self):
-        # P0-2 修复：用户只写 roles.main.provider 切到 moonshot 时，
+        # 用户只写 roles.main.provider 切到 moonshot 时，
         # 旧字段 agent.planner_model 不再传染，应取 provider default_model。
         cfg = {
             "agent": {"planner_model": "claude-sonnet-4-6"},

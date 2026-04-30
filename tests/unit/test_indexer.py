@@ -1,6 +1,6 @@
 """indexer 单元测试
 
-💡【第21课·搜索记忆】测试 pgvector 写入 pipeline 的各个环节。
+测试 pgvector 写入 pipeline 的各个环节。
 所有 LLM 调用和 DB 连接全部 mock，只测函数逻辑。
 
 pipeline 顺序：
@@ -496,7 +496,7 @@ class TestModelEnvOverride:
         importlib.reload(ctx)  # 恢复默认
 
 
-# ── P1-2：configure_memory_runtime 仅接受 openai_chat ────────────
+# ── configure_memory_runtime 仅接受 openai_chat ─────────────────
 
 
 class TestConfigureMemoryRuntime:
@@ -547,7 +547,7 @@ class TestConfigureMemoryRuntime:
             configure_memory_runtime(cfg)
 
 
-# ── P2-3：memory roles 接入 record_llm_call ─────────────────────
+# ── memory roles 接入 record_llm_call ───────────────────────────
 
 
 class TestExtractMetrics:

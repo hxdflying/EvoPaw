@@ -1,6 +1,6 @@
 """context_mgmt 单元测试
 
-💡【第19课·上下文生命周期】测试四组核心函数：
+测试四组核心函数：
   1. prune_tool_results  — 剪枝旧 tool result（in-place）
   2. chunk_by_tokens     — 按近似 token 数切分消息
   3. maybe_compress      — 超阈值时分块摘要压缩（in-place）
@@ -323,7 +323,7 @@ class TestAppendSessionRaw:
             assert raw_path.read_text(encoding="utf-8").strip() == ""
 
 
-# ── P1-2：configure_memory_runtime 仅接受 openai_chat ────────────
+# ── configure_memory_runtime 仅接受 openai_chat ─────────────────
 
 
 class TestConfigureMemoryRuntime:
@@ -363,7 +363,7 @@ class TestConfigureMemoryRuntime:
             configure_memory_runtime(cfg)
 
 
-# ── P2-3：_summarize_chunk 接入 record_llm_call ────────────────
+# ── _summarize_chunk 接入 record_llm_call ──────────────────────
 
 
 class TestSummarizeChunkMetrics:

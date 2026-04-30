@@ -248,7 +248,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_request_timeout_passed_to_async_client(self):
-        """P2-4：TurnRequest.timeout_s 透传到 httpx.AsyncClient(timeout=...)。"""
+        """TurnRequest.timeout_s 透传到 httpx.AsyncClient(timeout=...)。"""
         be = OpenAIChatBackend()
         resp = _mock_response({
             "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
@@ -275,7 +275,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_generation_params_from_turn_request(self):
-        """P2-1：TurnRequest.max_tokens / temperature / top_p 直接进出站请求体。"""
+        """TurnRequest.max_tokens / temperature / top_p 直接进出站请求体。"""
         be = OpenAIChatBackend()
         resp = _mock_response({
             "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
@@ -300,7 +300,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_generation_params_omitted_when_none(self):
-        """P2-1：未指定时不写入请求体（让 provider 用默认）。"""
+        """未指定时不写入请求体（让 provider 用默认）。"""
         be = OpenAIChatBackend()
         resp = _mock_response({
             "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
@@ -764,7 +764,7 @@ class TestToolsSchemaInjection:
         assert "tools" not in body
 
 
-# ── P2-5：max_turns 耗尽 ────────────────────────────────────────────────────
+# ── max_turns 耗尽 ─────────────────────────────────────────────────────────
 
 
 class TestRunTurnMaxTurns:
@@ -806,12 +806,12 @@ class TestRunTurnMaxTurns:
         assert instance.post.await_count == 2
 
 
-# ── P1-4：HTTP backend 工具循环 iteration 事件 ─────────────────────────────
+# ── HTTP backend 工具循环 iteration 事件 ───────────────────────────────────
 
 
 class TestIterationMetric:
     """每轮 for-loop 都应触发 record_llm_tool_iteration；
-    final / continue 两种 outcome 与本轮是否带 tool_calls 一一对应。"""
+    final / continue 两种 outcome 与当前响应是否带 tool_calls 一一对应。"""
 
     @pytest.mark.asyncio
     async def test_single_final_iteration_no_tools(self):
@@ -927,7 +927,7 @@ class TestIterationMetric:
         assert args == ("moonshot", "openai_chat", "subagent")
 
 
-# ── P2-2：ToolGate（工具调用拦截 / 改写） ──────────────────────────────────
+# ── ToolGate（工具调用拦截 / 改写） ────────────────────────────────────────
 
 
 class TestToolGate:
@@ -1145,7 +1145,7 @@ class TestToolGate:
 
     @pytest.mark.asyncio
     async def test_no_gate_default_behavior_unchanged(self):
-        """tool_gate=None（默认）时行为与 P2-2 之前完全一致。"""
+        """tool_gate=None（默认）时保持直接 dispatch 行为。"""
         be = OpenAIChatBackend()
         r1 = _mock_response(self._tool_call_payload())
         r2 = _mock_response(self._final_payload())

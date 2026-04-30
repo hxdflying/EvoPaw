@@ -192,7 +192,7 @@ class TestSlashHelp:
         assert "/verbose" in reply
         assert "/help" in reply
         assert "/status" in reply
-        assert "/stop" in reply  # P1-2
+        assert "/stop" in reply
 
 
 class TestSlashStatus:
@@ -209,7 +209,7 @@ class TestSlashStatus:
 
 
 class TestSlashStop:
-    """P1-2：/stop 走 dispatch 入口快路径，不入同 routing_key 队列。"""
+    """/stop 走 dispatch 入口快路径，不入同 routing_key 队列。"""
 
     async def test_stop_with_no_active_handle_replies_noop(
         self, runner, mock_sender,
@@ -264,7 +264,7 @@ class TestSlashStop:
     async def test_stop_not_blocked_by_same_routing_key_queue(
         self, session_mgr, mock_sender,
     ):
-        """关键验收：慢 agent 跑、第二条普通消息排队时，/stop 仍能立即响应。"""
+        """慢 agent 跑、第二条普通消息排队时，/stop 仍能立即响应。"""
         started = asyncio.Event()
 
         async def slow_agent(
@@ -1006,7 +1006,7 @@ class TestVoiceTranscription:
     async def test_agent_error_after_asr_success_preserves_transcript(
         self, session_mgr, mock_sender, tmp_path
     ):
-        """Agent 异常时 transcript 仍出现在回复里（设计文档 §12.6）."""
+        """Agent 异常时 transcript 仍出现在回复里。"""
         audio_path = tmp_path / "a.audio"
         audio_path.write_bytes(b"x")
         dl = MockDownloader(download_result=audio_path)
@@ -1205,7 +1205,7 @@ class TestDedup:
             await runner.shutdown()
 
 
-# ── Phase 3: 分类文案 & 回执 & 指标 ─────────────────────────────
+# ── 分类文案 & 回执 & 指标 ─────────────────────────────────────
 
 
 def _counter_value(counter, **labels) -> float:
@@ -1238,7 +1238,7 @@ class SlowSpeechService:
 
 
 class TestVoiceFailureClassified:
-    """按 AsrFailure.reason 映射文案（设计文档 §12.1-§12.5）."""
+    """按 AsrFailure.reason 映射文案。"""
 
     @pytest.mark.parametrize(
         ("reason", "expect_phrase"),
@@ -1279,7 +1279,7 @@ class TestVoiceFailureClassified:
 
 
 class TestVoiceAck:
-    """回执机制（设计文档 §7.2）."""
+    """回执机制。"""
 
     async def test_long_duration_triggers_ack_before_result(
         self, session_mgr, mock_sender, tmp_path
@@ -1404,7 +1404,7 @@ class TestVoiceAck:
 
 
 class TestAudioMetrics:
-    """Phase 3 Runner 侧 audio_* 指标."""
+    """Runner 侧 audio_* 指标。"""
 
     async def test_dedup_hit_increments_audio_dedup_metric(
         self, session_mgr, mock_sender, tmp_path
@@ -1498,7 +1498,7 @@ async def _async_return(value):
     return value
 
 
-# ── Phase 4: 显示配置可覆写 ──────────────────────────────────────
+# ── 显示配置可覆写 ─────────────────────────────────────────────
 
 
 class TestVoiceDisplayConfig:
@@ -1629,10 +1629,10 @@ class TestVoiceDisplayConfig:
         finally:
             await runner.shutdown()
 
-    async def test_defaults_preserve_phase2_behavior(
+    async def test_defaults_preserve_existing_display_behavior(
         self, session_mgr, mock_sender, tmp_path
     ):
-        """不传任何显示参数时，行为与 Phase 2 完全一致."""
+        """不传任何显示参数时，保留默认显示行为。"""
         audio_path = tmp_path / "a.audio"
         audio_path.write_bytes(b"x")
         dl = MockDownloader(download_result=audio_path)

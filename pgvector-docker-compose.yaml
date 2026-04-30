@@ -9,7 +9,7 @@ services:
       POSTGRES_USER:     evopaw
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-evopaw123}
     volumes:
-      # 💡 核心点：schema.sql 放在 initdb 目录，容器首次启动时自动执行
+      # schema.sql 放在 initdb 目录，容器首次启动时自动执行
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
       # 数据持久化：关闭容器后数据不丢失
       - pgvector_data:/var/lib/postgresql/data

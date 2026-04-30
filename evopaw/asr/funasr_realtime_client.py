@@ -1,7 +1,7 @@
 """Fun-ASR 实时 WebSocket API 客户端（one-shot 模式）.
 
-对应设计文档 §3.2 / §6.3。本客户端只负责单次 ``run-task → 推流 → finish-task
-→ task-finished`` 的短连接交互，不持有任何长连接状态。
+本客户端只负责单次 ``run-task → 推流 → finish-task → task-finished`` 的短连接交互，
+不持有任何长连接状态。
 
 凭证 ``DASHSCOPE_API_KEY`` 只在构造期注入，不向 Skill / Sub-Agent 暴露。
 """
@@ -23,7 +23,7 @@ from evopaw.observability.metrics import record_asr_ws_reconnect
 logger = logging.getLogger(__name__)
 
 
-# 允许整次 transcribe 重试的失败类型（设计文档 §12.2/§12.3）
+# 允许整次 transcribe 重试的失败类型。
 _RETRYABLE_REASONS = frozenset({"ws_connect", "submit", "disconnect"})
 
 
@@ -35,7 +35,7 @@ class FunASRRealtimeClient:
     """百炼 Fun-ASR 实时 WebSocket 客户端.
 
     每次 :meth:`transcribe` 调用创建并关闭一条独立 WebSocket，失败或超时
-    一律在 ``finally`` 中显式关闭，避免连接泄漏（设计文档 §18.4）。
+    一律在 ``finally`` 中显式关闭，避免连接泄漏。
 
     服务端事件路由（简化版）::
 
@@ -93,7 +93,7 @@ class FunASRRealtimeClient:
 
         对 ``ws_connect`` / ``submit`` / ``disconnect`` 三类失败做整次转写重试，
         最多 ``max_reconnect_retries`` 次。``task_failed`` / ``empty`` / ``timeout``
-        不重试（设计文档 §9 max_reconnect_retries 语义）。
+        不重试。
 
         Raises:
             AsrFailure: 所有重试耗尽或非可重试失败。

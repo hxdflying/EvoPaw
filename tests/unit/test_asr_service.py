@@ -1,4 +1,4 @@
-"""SpeechRecognitionService 单元测试（覆盖设计文档 §16.1.5）."""
+"""SpeechRecognitionService 单元测试。"""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def _histogram_sum(hist, **labels) -> float:
 
 
 class TestMetrics:
-    """服务层埋点：asr_requests_total / asr_latency_seconds（设计文档 §15）."""
+    """服务层埋点：asr_requests_total / asr_latency_seconds。"""
 
     async def test_success_increments_success_counter_and_latency(self, tmp_path):
         audio = tmp_path / "a.opus"

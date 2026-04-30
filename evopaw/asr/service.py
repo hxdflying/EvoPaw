@@ -1,7 +1,5 @@
 """语音识别服务层.
 
-对应设计文档 §8.2 / §15。职责：
-
 1. 从本地路径读取音频字节。
 2. 调用 :class:`FunASRRealtimeClient` 完成 one-shot 转写。
 3. 负责日志字段统一（``task_id`` / ``elapsed_ms`` / ``file_path`` 等）。

@@ -4,10 +4,10 @@
 `ResolvedRuntime` —— 单次「角色解析」的产物：(provider_id, runtime_family, model, api_base, api_key)。
 `RoleConfig` —— config.yaml 中 `roles.{role}` 块的解析结果。
 
-设计取舍（参见 docs/multi-provider-final-plan-2026-04-27.md §4 §7）：
-- `runtime_family` 用「协议族」而不是「品牌」，第一阶段三族即可（claude_sdk_compat /
+设计取舍：
+- `runtime_family` 用「协议族」而不是「品牌」（claude_sdk_compat /
   openai_chat / anthropic_messages）。新厂商接入只是 metadata，不改 backend 分支。
-- `extra_body_whitelist` 借鉴 hermes #8591 教训：provider-specific 字段必须显式声明，
+- `extra_body_whitelist` 要求 provider-specific 字段显式声明，
   避免在通用请求体上泄漏（如 OpenRouter `provider` 字段被推到 DashScope 请求里）。
 - `ResolvedRuntime.api_key` 在序列化（log/metrics/error）时由调用方负责脱敏；
   本模型不内置脱敏逻辑，避免过度设计。
@@ -19,7 +19,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# 第一阶段定义 3 个协议族即可。后续 P3/P4 再扩展（如 bedrock_converse、codex_responses）。
 RuntimeFamily = Literal["claude_sdk_compat", "openai_chat", "anthropic_messages"]
 
 

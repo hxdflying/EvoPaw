@@ -1,16 +1,8 @@
-"""Agent Hooks / StreamSink —— Verbose 模式事件接入
+"""Agent Hooks / StreamSink —— Verbose 模式事件接入。
 
-历史：
-- Phase 6：PreToolUse/PostToolUse 钩子直接由 Claude SDK 触发，飞书推送写在
-  hook 内部（`build_verbose_hooks`）。
-- 多 provider 改造 P2：引入 `StreamSink` 抽象（`evopaw.agent_backends.base`），
-  让 verbose 模式不再绑死 SDK；具体推送逻辑搬到 `FeishuStreamSink`。
-- 多 provider 改造 P5+：`build_stream_sink_hooks(sink)` 是 SDK hooks 的
-  唯一构造器；`claude_sdk` backend 直接复用，旧 `build_verbose_hooks(callback)`
-  只是一层 callback→sink 的薄壳，避免双份逻辑漂移。
-
-`build_verbose_hooks` 旧签名保留以兼容 `tests/unit/test_hooks.py` 与少数仍想绕过
-backend 抽象、直接构造 `ClaudeAgentOptions(hooks=...)` 的场景。
+`StreamSink` 把 provider backend 的工具事件转成统一的 verbose 推送接口。
+`build_stream_sink_hooks()` 负责把 sink 适配到 Claude SDK hooks；旧的
+`build_verbose_hooks(callback)` 保留为兼容入口。
 """
 
 from __future__ import annotations
@@ -30,7 +22,7 @@ VerboseCallback = Callable[[str], Coroutine[Any, Any, None]]
 
 
 # ──────────────────────────────────────────────────────────────────
-# FeishuStreamSink —— P2 新主路径用的 verbose 推送适配
+# FeishuStreamSink —— verbose 推送适配
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -77,12 +69,6 @@ class FeishuStreamSink:
 class CompositeStreamSink:
     """把同一事件 fan-out 给一组下游 StreamSink；单 sink 异常不影响其它。
 
-    动机（计划 P0-2）：
-    - 当前 verbose 模式只支持一个 `FeishuStreamSink`，未来想叠加 metrics sink、
-      调试落盘 sink 时需要组合能力。
-    - 借鉴 Nanobot CompositeHook 的错误隔离：一个 sink 抛错只记 warning，
-      不阻断其它 sink，也不打破主 query 流程。
-
     实现 `evopaw.agent_backends.base.StreamSink` Protocol（runtime_checkable，
     无需显式继承）。空列表也是合法构造，等价于 no-op sink。
     """
@@ -112,7 +98,7 @@ class CompositeStreamSink:
 
 
 # ──────────────────────────────────────────────────────────────────
-# build_stream_sink_hooks —— SDK hooks 唯一构造器（P5+ 主路径）
+# build_stream_sink_hooks —— SDK hooks 构造器
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -161,7 +147,7 @@ def build_stream_sink_hooks(stream_sink: StreamSink | None) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────
-# build_verbose_hooks —— 旧 API：callback 形态的薄壳（保留以兼容老测试）
+# build_verbose_hooks —— callback 形态兼容入口
 # ──────────────────────────────────────────────────────────────────
 
 
@@ -188,9 +174,6 @@ class _CallbackSink:
 
 def build_verbose_hooks(callback: VerboseCallback | None = None) -> dict:
     """构建 verbose 模式的 SDK hooks 字典（旧 API）。
-
-    P5+ 之后内部走 `build_stream_sink_hooks(_CallbackSink(callback))`，与
-    backend 路径共享同一份 hook 实现，避免双份逻辑漂移。
 
     Args:
         callback: 可选异步回调；为 None 时仅打印日志。

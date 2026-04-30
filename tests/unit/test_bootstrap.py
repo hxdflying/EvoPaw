@@ -1,7 +1,7 @@
 """bootstrap 单元测试
 
-💡【第19/20课·Bootstrap】build_bootstrap_prompt() 从 workspace 目录读取
-soul.md / user.md / agent.md / memory.md（前200行），
+build_bootstrap_prompt() 从 workspace 目录读取 soul.md / user.md / agent.md /
+memory.md（前200行），
 拼装成 <soul> <user_profile> <agent_rules> <memory_index> 四段式 backstory。
 """
 

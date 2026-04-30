@@ -1,11 +1,7 @@
-"""Provider Registry — 内置 provider 清单 + 配置合并
+"""Provider Registry — 内置 provider 清单与配置合并。
 
-设计取舍：
-- 第一阶段只内置 `claude_sdk` / `anthropic` / `dashscope` 三个 ProviderSpec；
-  其它（openrouter / moonshot / deepseek / openai / 自定义）等 P3 接入 OpenAIChatBackend
-  时再补，避免在没有第二个真实 backend 之前过度设计。
-- `build_registry()` 接受 config.yaml 中 `providers:` 块，与 DEFAULT 合并；
-  config 中同名 provider 字段覆盖默认；config 中新名 provider 直接加入 registry。
+`build_registry()` 接受 config.yaml 中的 `providers:` 块，与内置默认值合并。
+config 中同名 provider 覆盖默认字段；新 provider 直接加入 registry。
 """
 
 from __future__ import annotations
@@ -15,7 +11,7 @@ from typing import Mapping
 from .models import ProviderSpec
 
 # ──────────────────────────────────────────────────────────────────
-# 内置 ProviderSpec（最小集合，第一阶段够用）
+# 内置 ProviderSpec
 # ──────────────────────────────────────────────────────────────────
 
 DEFAULT_PROVIDERS: dict[str, ProviderSpec] = {
@@ -25,7 +21,7 @@ DEFAULT_PROVIDERS: dict[str, ProviderSpec] = {
         api_key_env=None,  # CLI 走 OAuth；如显式给 ANTHROPIC_API_KEY 也兼容，但非必须
         default_api_base=None,
         default_model="claude-sonnet-4-6",
-        supports_vision=True,  # 显式声明（与 family default 一致）
+        supports_vision=True,
         supports_tool_calls=True,
         supports_streaming=True,
         supports_prompt_caching=True,
@@ -36,7 +32,7 @@ DEFAULT_PROVIDERS: dict[str, ProviderSpec] = {
         api_key_env="ANTHROPIC_API_KEY",
         default_api_base="https://api.anthropic.com",
         default_model="claude-sonnet-4-6",
-        supports_vision=True,  # 显式声明
+        supports_vision=True,
         supports_tool_calls=True,
         supports_streaming=True,
         supports_prompt_caching=True,
@@ -53,11 +49,9 @@ DEFAULT_PROVIDERS: dict[str, ProviderSpec] = {
         supports_tool_calls=True,
         supports_streaming=True,
         supports_prompt_caching=False,
-        # DashScope 兼容 OpenAI 的 chat completions，但允许通过 extra_body
-        # 注入 enable_thinking 控制 Qwen 思考模式（详见 §6.7）。
+        # DashScope OpenAI 兼容端允许用 extra_body 控制 Qwen 思考模式。
         extra_body_whitelist=frozenset({"enable_thinking"}),
-        # memory_summary / memory_extract 等记忆角色历来要求关闭思考模式以加速摘要；
-        # 这里作为 provider 级默认下沉，避免 memory 层 hardcode。
+        # 记忆角色默认关闭思考模式，降低摘要和抽取延迟。
         default_extra_body={"enable_thinking": False},
     ),
 }

@@ -23,10 +23,8 @@ from evopaw.provider_runtime import ResolveError, ResolvedRuntime, resolve_runti
 
 logger = logging.getLogger(__name__)
 
-# 通义 API 配置
-# 模型名通过环境变量 fallback，支持运维不改源码切换记忆系统的 LLM（m-7）。
-# resolver 接入后（configure_memory_runtime 被 main.py 调用），_EMBED_MODEL/_EXTRACT_MODEL
-# 会被 roles.memory_embedding / roles.memory_extract 的解析结果覆盖。
+# 通义 API 配置。启动期调用 configure_memory_runtime 后，模型名会被 roles.memory_*
+# 解析结果覆盖；未配置 resolver 时保留环境变量 fallback。
 _QWEN_API_KEY  = os.getenv("QWEN_API_KEY", "")
 _EMBED_MODEL   = os.getenv("EVOPAW_MEMORY_EMBED_MODEL", "text-embedding-v3")
 _EMBED_DIM     = int(os.getenv("EVOPAW_MEMORY_EMBED_DIM", "1024"))
@@ -43,11 +41,8 @@ def configure_memory_runtime(app_config: Mapping) -> None:
     未调用时模块沿用旧行为（env var + DashScope 硬编码端点），保持向后兼容。
     解析失败（ResolveError）的角色不阻断启动，仅 warn 并保留旧路径。
 
-    P1-2：memory_extract / memory_embedding 当前仅支持 OpenAI-compatible 端点
-    （`make_openai_client()` 永远返回 OpenAI SDK 实例；embedding 也走 chat
-    base_url）。如果 resolver 解析出其它 runtime_family（如 anthropic_messages），
-    运行时必失败——此处显式抛 ResolveError，避免「配置静态合法、运行时必失败」
-    的误导性路径。
+    memory_extract / memory_embedding 当前仅支持 OpenAI-compatible 端点。如果 resolver
+    解析出其它 runtime_family，此处显式抛 ResolveError。
     """
     global _resolved_extract, _resolved_embed, _EXTRACT_MODEL, _EMBED_MODEL, _llm_client, _embed_client
     try:
@@ -115,7 +110,7 @@ def _connect_db(db_dsn: str):
 def _make_llm_client(resolved: ResolvedRuntime | None = None):
     """惰性创建 LLM client（避免模块导入时就初始化）。
 
-    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`（P1-4）。
+    具体构造逻辑收敛在 `_dashscope_clients.make_openai_client`。
     """
     return make_openai_client(resolved)
 

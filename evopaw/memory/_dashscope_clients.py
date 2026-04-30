@@ -1,15 +1,10 @@
-"""DashScope（OpenAI 兼容端）客户端构造器（P1-4 / N-2）。
+"""DashScope（OpenAI 兼容端）客户端构造器。
 
 memory 层有两个角色都连同一类端点：
 - `memory_summary`（context_mgmt.py）走 chat/completions
 - `memory_extract` / `memory_embedding`（indexer.py）走 chat/completions + embeddings
 
-它们以前各自重复一段「if resolved else fallback 到 DashScope hardcoded base_url」逻辑。
 本模块把该逻辑收口为单一 `make_openai_client()`，三个角色都调用同一个工厂。
-
-模块级 lazy singleton（`_resolved_*` / `_*_client` 等）仍保留在各自的 context_mgmt /
-indexer 中——单测 patch 这些符号已大量存在（参见 tests/unit/test_indexer.py），
-此处只做客户端构造层的 dedupe，不动缓存层。
 """
 
 from __future__ import annotations

@@ -4,8 +4,8 @@
 SKILL.md 正文作为 system_prompt，允许 Bash/Read/Write/Edit/Grep/Glob 工具。
 每次调用创建独立 query() session，防止状态污染。
 
-P1-1：每次调用关联一个 8 字符 hex task_id，用于日志前缀（`[subagent#xxxxxxxx]`）
-和错误回执（`task#xxxxxxxx`），便于跨 backend 与未来 cancel/async 关联定位。
+每次调用关联一个 8 字符 hex task_id，用于日志前缀（`[subagent#xxxxxxxx]`）
+和错误回执（`task#xxxxxxxx`），便于定位和取消任务。
 注意：`SkillDispatcher.dispatch -> str` 不变，task_id 仅在文本/日志中暴露。
 """
 

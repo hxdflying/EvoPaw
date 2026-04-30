@@ -1,9 +1,9 @@
-"""Skill loader e2e（P5）— 三族主 runtime 共享 SkillDispatcher 路径冒烟。
+"""Skill loader e2e：三族主 runtime 共享 SkillDispatcher 路径冒烟。
 
 不连真实 LLM 端点：用 FakeBackend mock 主 Agent runtime；
 不真启 Sub-Agent：mock run_skill_agent。
 
-聚焦 P5 验收点（详见 docs/skills-provider-matrix.md §5）：
+覆盖点：
 - 所有 enabled skill 在 dispatcher 中能找到正确分发路径。
 - 三族主 runtime（claude_sdk_compat / openai_chat / anthropic_messages）都把
   同一份 SkillDispatcher 业务逻辑暴露给 LLM。
@@ -105,7 +105,7 @@ class FakeBackend:
         return TurnResult(text="ok")
 
 
-# ── §1 catalog 完整性 ──────────────────────────────────────────────────────
+# ── catalog 完整性 ─────────────────────────────────────────────────────────
 
 
 class TestSkillCatalogIntegrity:
@@ -139,7 +139,7 @@ class TestSkillCatalogIntegrity:
             )
 
 
-# ── §2 三族主 runtime backend_hints 路径 ──────────────────────────────────────
+# ── 三族主 runtime backend_hints 路径 ───────────────────────────────────────
 
 
 class TestThreeRuntimeFamiliesShareDispatcher:
@@ -213,7 +213,7 @@ class TestThreeRuntimeFamiliesShareDispatcher:
             assert skill_name in names, f"{skill_name} 不在 dispatcher.registry"
 
 
-# ── §3 task skills 始终 fallback 到 Claude SDK Sub-Agent ────────────────────
+# ── task skills 始终 fallback 到 Claude SDK Sub-Agent ──────────────────────
 
 
 class TestTaskSkillsAlwaysFallBackToClaudeSubAgent:
@@ -260,7 +260,7 @@ class TestTaskSkillsAlwaysFallBackToClaudeSubAgent:
             assert out.endswith("</skill_instructions>")
 
 
-# ── §4 主 Agent 跨 runtime 调用 task skill 的 e2e ─────────────────────────────
+# ── 主 Agent 跨 runtime 调用 task skill 的 e2e ──────────────────────────────
 
 
 class TestEndToEndTaskSkillAcrossRuntimes:

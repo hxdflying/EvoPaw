@@ -2,7 +2,7 @@
 
 不启动整个 main，只测可独立调用的工厂函数：
 - _build_speech_service：enabled / 缺 API Key / 别名警告
-- _warn_if_model_is_alias：覆盖快照号判定（§9.1 / Phase 4 第 3 项）
+- _warn_if_model_is_alias：覆盖快照号判定
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class TestBuildSpeechService:
             _build_speech_service({"enabled": True, "model": "fun-asr-realtime"})
         joined = " ".join(r.message for r in caplog.records)
         assert "稳定别名" in joined
-        assert "§9.1" in joined or "9.1" in joined
+        assert "生产建议固定为快照号" in joined
 
 
 class TestWarnIfModelIsAlias:
@@ -69,7 +69,7 @@ class TestWarnIfModelIsAlias:
 
 
 class TestValidateSubagentRuntime:
-    """P1-1：roles.subagent 必须解析为 claude_sdk_compat。"""
+    """roles.subagent 必须解析为 claude_sdk_compat。"""
 
     def test_default_subagent_passes(self):
         # 默认配置走 claude_sdk，校验通过。

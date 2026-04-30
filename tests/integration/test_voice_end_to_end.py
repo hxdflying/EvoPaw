@@ -1,4 +1,4 @@
-"""语音端到端集成测试（设计文档 §16.2）.
+"""语音端到端集成测试。
 
 启动一个本地 aiohttp WebSocket mock server 模拟百炼 Fun-ASR 实时 API，
 跑完整的 Runner → SpeechRecognitionService → FunASRRealtimeClient → WS 链路，
@@ -300,7 +300,7 @@ class TestVoiceEndToEnd:
             try:
                 await runner.dispatch(_audio_inbound(msg_id="om_fail"))
                 _, reply, _ = await sender.wait(timeout=10.0)
-                # task_failed 类别 → §12.5 文案
+                # task_failed 类别映射到通用转写失败文案。
                 assert "转写失败" in reply
             finally:
                 await runner.shutdown()
@@ -347,11 +347,11 @@ def _build_runner(
     return runner, sender, session_mgr
 
 
-# ── 设计文档 §16.3 四类样例（mock 层面可验证的部分）──────────
+# ── 四类样例（mock 层面可验证的部分）──────────────────────────
 
 
 class TestVoiceFourSampleCategories:
-    """对应设计文档 §16.3 的四类真实样例 —— mock server 层面能验证的子集.
+    """四类真实样例中 mock server 层面能验证的子集。
 
     真实录音、采样率、转写质量等部分仍需 runbook 步骤 D 用真凭证联调。
     本 class 验证的是"链路在四类输入下能给出预期回复格式与失败分类"。
@@ -418,7 +418,7 @@ class TestVoiceFourSampleCategories:
             await server.close()
 
     async def test_disconnect_mid_stream_yields_disconnect_reply(self, tmp_path):
-        """样例 4 子项：连接中途异常 → §12.3 disconnect 文案."""
+        """样例 4 子项：连接中途异常 → disconnect 文案。"""
         server, ws_url = await _spawn_ws_server(
             sentences=[], drop_after_started=True,
         )
@@ -438,7 +438,7 @@ class TestVoiceFourSampleCategories:
             await server.close()
 
     async def test_overall_timeout_yields_timeout_reply(self, tmp_path):
-        """样例 4 子项：服务端 task-started 后再无任何事件 → max_wait_s 触发 §12.4 文案."""
+        """样例 4 子项：服务端 task-started 后再无任何事件 → timeout 文案。"""
         server, ws_url = await _spawn_ws_server(
             sentences=[], never_send_finished=True,
         )

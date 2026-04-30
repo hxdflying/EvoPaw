@@ -1,11 +1,11 @@
-"""Provider Runtime — 多 Provider 抽象层（P1）
+"""Provider Runtime — 多 Provider 抽象层。
 
 把「provider 选择 / endpoint 解析 / 凭证读取 / capability 判断」从散落的
 位置（main.py / claude_client.py / context_mgmt.py / indexer.py / config）
 收敛到一个模块。
 
-本阶段不替换任何调用方式，只新增读取代理；旧字段（agent.planner_model 等）
-继续可读、可工作。
+旧字段（agent.planner_model 等）仍按兼容逻辑读取，推荐新配置使用
+roles.<role>。
 """
 
 from __future__ import annotations

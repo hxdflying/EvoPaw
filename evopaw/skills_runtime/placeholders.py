@@ -1,4 +1,4 @@
-"""SKILL.md 占位符渲染（P1-3）。
+"""SKILL.md 占位符渲染。
 
 集中管理新旧两套占位符语法，对 SKILL.md 文本做字符串替换：
 
@@ -15,7 +15,7 @@
 | ``${EVOPAW_TODAY}``          | ``YYYY-MM-DD``（``Asia/Shanghai`` 时区） |
 | ``${EVOPAW_NOW}``            | ``YYYY-MM-DD HH:MM:SS TZ``（``Asia/Shanghai`` 时区） |
 
-旧 alias（保留一个版本周期，新写 SKILL.md 优先用新规约）：
+旧 alias（兼容历史 SKILL.md，新写 SKILL.md 优先用新规约）：
 
 | 旧 | 等价新 |
 |---|---|
@@ -24,7 +24,7 @@
 | ``{session_id}``  | ``${EVOPAW_SESSION_ID}`` |
 | ``{session_dir}`` | ``${EVOPAW_SESSION_DIR}`` |
 
-替换是一次性、字符串级 ``str.replace``，不识别转义。本基线版本不支持
+替换是一次性、字符串级 ``str.replace``，不识别转义。当前实现不支持
 ``\\${EVOPAW_TODAY}`` 这类反斜杠转义。
 """
 

@@ -1,4 +1,4 @@
-"""SubAgentRegistry 单元测试（P1-2）。"""
+"""SubAgentRegistry 单元测试。"""
 
 from __future__ import annotations
 

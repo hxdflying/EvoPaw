@@ -1,16 +1,8 @@
-"""Skill 注册表 —— 解析 load_skills.yaml + SKILL.md frontmatter。
+"""Skill 注册表：解析 load_skills.yaml 与 SKILL.md frontmatter。
 
-历史：
-
-- Phase 6：仅读取 `load_skills.yaml` 中的 `name/type/enabled`，再检查 `SKILL.md`
-  是否存在；缺少依赖（`pandoc`、`soffice`、Tavily key、飞书凭证文件等）问题
-  要等 Sub-Agent 启动后才暴露。
-- 改造方案 P0-1：在不破坏旧 registry 字段（`type / path`）的前提下，新增
-  `available / unavailable_reason / requires / platforms` 元数据；缺依赖
-  skill 仍出现在 `<available_skills>` XML 中（让 Main Agent 知道能力存在），
-  但 dispatcher 拒绝调用，避免 Sub-Agent 启动后再失败。
-
-下划线前缀名仅出于"原模块测试 import 不破"的兼容考虑；新代码可直接调用。
+注册表保留每个 Skill 的 type/path/available/unavailable_reason/requires/
+platforms/execution_mode，让主 Agent 能看到能力是否存在，同时由 dispatcher
+在依赖不满足时硬拦截。下划线前缀名保留给现有测试和内部调用。
 """
 
 from __future__ import annotations
@@ -32,8 +24,8 @@ logger = logging.getLogger(__name__)
 # 由 unavailable_reason 解释；容器内则与 Skill 脚本看到的路径一致。
 _DEFAULT_WORKSPACE_ROOT = "/workspace"
 
-# P2-1：execution.mode 合法值。SKILL.md 未声明或写了非法值时降级为 foreground，
-# 保持向后兼容；只有显式 `execution.mode: background` 才进入后台路径。
+# execution.mode 合法值。SKILL.md 未声明或写了非法值时降级为 foreground；
+# 只有显式 `execution.mode: background` 才进入后台路径。
 _EXECUTION_MODES = frozenset({"foreground", "background"})
 _DEFAULT_EXECUTION_MODE = "foreground"
 
@@ -264,8 +256,8 @@ def _build_skill_registry(
             "unavailable_reason": reason,
             "requires": requires,
             "platforms": platforms,
-            # P2-1：默认 foreground；显式声明 background 时 dispatcher 会立即返回
-            # task_id 提示并把执行 spawn 到 SubAgentRegistry。
+            # 默认 foreground；显式声明 background 时 dispatcher 会立即返回 task_id，
+            # 并把执行 spawn 到 SubAgentRegistry。
             "execution_mode": _parse_execution_mode(front),
         }
 

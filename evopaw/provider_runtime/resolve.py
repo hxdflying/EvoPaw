@@ -1,10 +1,6 @@
-"""resolve_runtime —— 角色到 ResolvedRuntime 的解析器
+"""resolve_runtime —— 角色到 ResolvedRuntime 的解析器。
 
-借鉴 hermes runtime_provider 的「分层 resolver」思路，但用 evopaw 自己的角色名
-（main / subagent / memory_summary / memory_embedding / asr / vision / fallback），
-不照抄 hermes 的 `auxiliary.vision / auxiliary.compression` 嵌套结构。
-
-优先级（从高到低）：
+解析优先级（从高到低）：
   1. 显式参数（`overrides=`，主要用于测试）
   2. config.yaml 的 `roles.{role}` 块
   3. 旧字段兼容（`agent.planner_model` → roles.main.model 等）
@@ -29,8 +25,7 @@ logger = logging.getLogger(__name__)
 # 角色 → 默认 provider 绑定
 # ──────────────────────────────────────────────────────────────────
 #
-# 第一阶段：main / subagent 默认 claude_sdk；memory 系列默认 dashscope（与现状一致）。
-# 用户在 config.yaml 写 `roles.main = {provider: anthropic, model: ...}` 即可覆盖。
+# 用户可在 config.yaml 写 `roles.main = {provider: anthropic, model: ...}` 覆盖默认绑定。
 
 DEFAULT_ROLE_BINDINGS: dict[str, str] = {
     "main": "claude_sdk",
@@ -43,7 +38,7 @@ DEFAULT_ROLE_BINDINGS: dict[str, str] = {
 
 
 # ──────────────────────────────────────────────────────────────────
-# 角色 → 默认模型（P0-1 修复）
+# 角色 → 默认模型
 # ──────────────────────────────────────────────────────────────────
 #
 # 同一 provider 下不同角色的默认模型不同（如 dashscope 的 chat / embedding
@@ -80,18 +75,17 @@ def _warn_once_legacy(role: str, legacy_key: str) -> None:
         return
     _LEGACY_WARNED.add(legacy_key)
     logger.warning(
-        "config.yaml: agent.%s 已被弃用，请改用 roles.%s（多 provider 改造 P1）。"
+        "config.yaml: agent.%s 已被弃用，请改用 roles.%s。"
         " 当前仍按旧字段读取，预计在两个发布周期后移除。",
         legacy_key, role,
     )
 
 
 # ──────────────────────────────────────────────────────────────────
-# 环境变量回退（沿用现有约定，迁移期保留）
+# 环境变量回退
 # ──────────────────────────────────────────────────────────────────
 #
-# 这些变量在 evopaw/memory/{context_mgmt,indexer}.py 中已使用（详见原文 §6.6）。
-# resolver 从这里读取后，模块内不再直接 os.getenv，凭 ResolvedRuntime.model 即可。
+# resolver 从这里读取模型名后，memory 模块只依赖 ResolvedRuntime.model。
 
 _ROLE_ENV_MODEL_FALLBACK: dict[str, str] = {
     "memory_summary": "EVOPAW_MEMORY_SUMMARY_MODEL",
@@ -215,7 +209,7 @@ def resolve_runtime(
         1. overrides
         2. roles.{role}
         3. agent.{planner_model|sub_agent_model}（仅当 provider 仍是该 role 的
-           默认绑定时生效——用户显式切到非默认 provider 后，legacy 字段不再传染）
+           默认绑定时生效；用户显式切到非默认 provider 后不再继承旧字段）
         4. EVOPAW_MEMORY_*_MODEL（memory 系列）
         5. DEFAULT_ROLE_MODELS[role]（仅在 provider 仍是默认绑定时生效）
         6. provider.default_model

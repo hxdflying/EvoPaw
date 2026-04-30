@@ -1,4 +1,4 @@
-"""skills_runtime.instructions 单元测试（P0-4 占位符基线保护）。
+"""skills_runtime.instructions 单元测试。
 
 覆盖：
 
@@ -8,10 +8,10 @@
 - 缺省 session_id 时退化为 `<session_id>` 占位
 - frontmatter 在指令注入前被剥离
 - `<execution_directive>` 被追加到末尾，且 routing_key 出现在其中
-- `<available_skills>` XML 含 P0-1 的 `<available>` / `<unavailable_reason>` 标记
+- `<available_skills>` XML 含 `<available>` / `<unavailable_reason>` 标记
 - 已构建的 19 个 enabled skill 都能成功构建 instruction 字符串
 
-注：本文件保护「字节级当前行为」，更换占位符体系（P1-3）需要先改这里。
+注：本文件保护当前占位符与指令拼接行为；调整占位符体系时需要同步更新。
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ class TestBuildDescriptionXml:
 
 
 class TestEvopawPlaceholders:
-    """P1-3：在 _get_skill_instructions 路径下，${EVOPAW_*} 新占位符也被替换。"""
+    """在 _get_skill_instructions 路径下，${EVOPAW_*} 新占位符也被替换。"""
 
     @pytest.fixture
     def registry_with_evopaw_skill(self, tmp_path: Path) -> dict:

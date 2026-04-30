@@ -296,7 +296,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_request_timeout_passed_to_async_client(self):
-        """P2-4：TurnRequest.timeout_s 透传到 httpx.AsyncClient(timeout=...)。"""
+        """TurnRequest.timeout_s 透传到 httpx.AsyncClient(timeout=...)。"""
         be = AnthropicMessagesBackend()
         resp = _mock_response(_text_only_response())
 
@@ -318,7 +318,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_generation_params_from_turn_request(self):
-        """P2-1：TurnRequest.max_tokens / temperature / top_p 直接进出站请求体。"""
+        """TurnRequest.max_tokens / temperature / top_p 直接进出站请求体。"""
         be = AnthropicMessagesBackend()
         patcher, instance = _patch_async_client(_mock_response(_text_only_response()))
         with patcher:
@@ -330,7 +330,7 @@ class TestRunTurnTextOnly:
 
     @pytest.mark.asyncio
     async def test_generation_params_omitted_when_none(self):
-        """P2-1：temperature / top_p 不指定时不写入请求体（让 provider 用默认）。
+        """temperature / top_p 不指定时不写入请求体（让 provider 用默认）。
         max_tokens 是 Anthropic API 必填字段，缺省回退到 4096。"""
         be = AnthropicMessagesBackend()
         patcher, instance = _patch_async_client(_mock_response(_text_only_response()))
@@ -616,7 +616,7 @@ class TestToolsSchemaInjection:
         assert "tools" not in body
 
 
-# ── P2-5：max_turns 耗尽 ────────────────────────────────────────────────────
+# ── max_turns 耗尽 ─────────────────────────────────────────────────────────
 
 
 class TestRunTurnMaxTurns:
@@ -644,12 +644,12 @@ class TestRunTurnMaxTurns:
         assert instance.post.await_count == 2
 
 
-# ── P1-4：HTTP backend 工具循环 iteration 事件 ─────────────────────────────
+# ── HTTP backend 工具循环 iteration 事件 ───────────────────────────────────
 
 
 class TestIterationMetric:
     """每轮 for-loop 都应触发 record_llm_tool_iteration；
-    final / continue 两种 outcome 与本轮 stop_reason 是否 tool_use 一一对应。"""
+    final / continue 两种 outcome 与当前响应 stop_reason 是否 tool_use 一一对应。"""
 
     @pytest.mark.asyncio
     async def test_single_final_iteration_no_tools(self):
@@ -723,7 +723,7 @@ class TestIterationMetric:
         assert args == ("anthropic_alt", "anthropic_messages", "subagent")
 
 
-# ── P2-2：ToolGate（工具调用拦截 / 改写） ──────────────────────────────────
+# ── ToolGate（工具调用拦截 / 改写） ────────────────────────────────────────
 
 
 class TestToolGate:

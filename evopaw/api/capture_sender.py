@@ -29,7 +29,7 @@ class CaptureSender:
         return fut
 
     def record_skills(self, root_id: str, skills: list[str]) -> None:
-        """主 Agent 调用，记录本轮触发的 Skill 名（按调用顺序）。"""
+        """主 Agent 调用，记录当前轮次触发的 Skill 名（按调用顺序）。"""
         if not root_id:
             return
         self._skills_by_root[root_id] = list(skills)

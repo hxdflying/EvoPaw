@@ -1,6 +1,6 @@
 --  pgvector 数据库 schema
 -- 运行前先启动：docker compose -f pgvector-docker-compose.yaml up -d
--- 💡 核心点：向量只是普通列（vector 类型），和标量字段在同一张表，无需单独向量数据库
+-- 向量作为普通列存储，和标量字段在同一张表内。
 
 CREATE EXTENSION IF NOT EXISTS vector;  -- 启用 pgvector 扩展
 
@@ -25,14 +25,14 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     turn_ts         BIGINT      NOT NULL,              -- 原始对话时间戳（毫秒）
 
-    -- 💡 核心点：向量就是普通列，不是独立的向量数据库
+    -- 向量列
     summary_vec     vector(1024),                      -- 摘要语义向量（text-embedding-v3 dim=1024）
     message_vec     vector(1024),                      -- 原始对话语义向量
 
     -- 全文搜索列（BM25 近似，PostgreSQL 内置 GIN 索引）
     search_text     TEXT        NOT NULL DEFAULT '',   -- user_message + tags 拼接，供 LIKE / tsv 检索
     search_tsv      TSVECTOR    GENERATED ALWAYS AS (to_tsvector('simple', search_text)) STORED
-    -- 💡 核心点：search_tsv 自动维护，写入 search_text 即可，无需手动更新
+    -- search_tsv 自动维护，写入 search_text 即可
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────

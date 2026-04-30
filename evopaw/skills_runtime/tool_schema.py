@@ -1,7 +1,4 @@
-"""Skill tool schema 单一事实源（P1-3）。
-
-三个 adapter（claude_mcp / openai_tools / anthropic_tools）以前各自重复声明
-`skill_name / task_context` 的字段类型与描述。新增字段时需要同步改三处。
+"""Skill tool schema 单一事实源。
 
 本模块集中：
 - 工具名 `skill_loader`
