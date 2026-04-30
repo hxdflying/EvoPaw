@@ -1,7 +1,5 @@
 <div align="center">
-  <strong>Language / 语言</strong><br>
-  <a href="./README.md"><img alt="English" src="https://img.shields.io/badge/Language-English-blue?style=for-the-badge"></a>
-  <a href="./README.zh-CN.md"><img alt="中文" src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E4%B8%AD%E6%96%87-green?style=for-the-badge"></a>
+  <strong>English</strong> | <a href="./README.zh-CN.md">中文</a>
 </div>
 
 # EvoPaw
