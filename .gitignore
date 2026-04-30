@@ -1,6 +1,8 @@
 # Runtime data
 data/
 tests/logs/
+workspace-init/
+.codex
 
 # Python
 __pycache__/
@@ -10,6 +12,12 @@ __pycache__/
 dist/
 build/
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.json
+htmlcov/
 config.yaml
 
 # Backup files
