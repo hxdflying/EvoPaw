@@ -20,7 +20,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from evopaw.llm.claude_client import DEFAULT_SUB_AGENT_MODEL
 from evopaw.session.models import MessageEntry
 
-from ..dispatcher import SkillDispatcher
+from ..dispatcher import ResultCallback, SkillDispatcher
 from ..tool_schema import SKILL_TOOL_CLAUDE_MCP_ARGS, SKILL_TOOL_NAME
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,8 @@ def build_skill_loader_server(
     skills_dir: Path | None = None,
     sub_agent_model: str = DEFAULT_SUB_AGENT_MODEL,
     sub_agent_max_turns: int = 20,
+    result_callback: ResultCallback | None = None,
+    workspace_root: str = "/workspace",
 ):
     """工厂：构建 skill_loader MCP server，绑定当前 session。
 
@@ -46,6 +48,8 @@ def build_skill_loader_server(
         skills_dir: skills 目录路径（测试时覆盖）
         sub_agent_model: 任务型 Skill 的 Sub-Agent 模型（透传至 run_skill_agent）
         sub_agent_max_turns: Sub-Agent 最大对话轮次（透传至 run_skill_agent）
+        result_callback: background skill 完成后的结果回调；缺省 None 时
+            background 任务结果只写日志、不推送给用户。
 
     Returns:
         Claude Agent SDK MCP server 配置对象
@@ -57,6 +61,8 @@ def build_skill_loader_server(
         skills_dir=skills_dir,
         sub_agent_model=sub_agent_model,
         sub_agent_max_turns=sub_agent_max_turns,
+        result_callback=result_callback,
+        workspace_root=workspace_root,
     )
     description = dispatcher.get_description()
 

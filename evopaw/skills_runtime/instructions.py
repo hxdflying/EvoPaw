@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+from html import escape as _xml_escape
 from typing import Any
 
 from .placeholders import _SKILLS_MOUNT, render
@@ -41,13 +42,21 @@ def _build_description_xml(
         # 旧 registry 没有 available 字段时按可用处理，保持向后兼容。
         available = info.get("available", True)
         reason = info.get("unavailable_reason", "")
+        # SKILL.md 的 description / name / unavailable_reason 是用户态可写的字符串，
+        # 直接 f-string 进 XML 会让一条精心构造的 description（含 </description>
+        # 或 </available_skills>）破坏整段工具表面结构。这里统一 XML escape，
+        # html.escape 默认转义 & < >，保证 LLM 看到的标签结构稳定。
+        safe_name = _xml_escape(name)
+        safe_type = _xml_escape(str(info["type"]))
+        safe_desc = _xml_escape(desc)
+        safe_reason = _xml_escape(reason)
         xml_parts.append(
             f"  <skill>\n"
-            f"    <name>{name}</name>\n"
-            f"    <type>{info['type']}</type>\n"
+            f"    <name>{safe_name}</name>\n"
+            f"    <type>{safe_type}</type>\n"
             f"    <available>{'true' if available else 'false'}</available>\n"
-            + (f"    <unavailable_reason>{reason}</unavailable_reason>\n" if not available else "")
-            + f"    <description>{desc}</description>\n"
+            + (f"    <unavailable_reason>{safe_reason}</unavailable_reason>\n" if not available else "")
+            + f"    <description>{safe_desc}</description>\n"
             f"  </skill>"
         )
 

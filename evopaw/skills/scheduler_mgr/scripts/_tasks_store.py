@@ -8,6 +8,61 @@ from typing import Any, Dict, List
 
 TASKS_PATH = Path("/workspace/cron/tasks.json")
 
+# payload.message 最大长度。CronService 触发后 message 会作为 InboundMessage.content
+# 进 main_agent，太长会撑爆 prompt；正常自然语言任务 800 字符已经富余。
+_MAX_MESSAGE_LEN = 800
+
+# 黑名单：典型的命令注入 / 直接 shell payload 起始关键词。
+# 不追求完备防御（自然语言里也可能合法出现 "rm" 等词），只挡掉
+# "整段 message 看起来像 shell 命令" 的最显眼形式：开头就是命令名 + 空格。
+_SHELLY_PREFIXES = (
+    "rm ", "rm\t",
+    "sudo ", "sudo\t",
+    "bash ", "bash\t", "sh ", "sh\t",
+    "python ", "python\t", "python3 ", "python3\t",
+    "curl ", "curl\t", "wget ", "wget\t",
+    "dd ", "dd\t",
+    "chmod ", "chmod\t", "chown ", "chown\t",
+    "kill ", "kill\t", "pkill ", "pkill\t",
+    "eval ", "eval\t", "exec ", "exec\t",
+    "/bin/", "/usr/bin/", "/sbin/",
+)
+
+
+def _validate_message(message: str) -> str:
+    """校验 payload.message。
+
+    规则：
+      1. 必须为非空、非全空白字符串。
+      2. 长度 ≤ 800 字符。
+      3. trimmed 后不能以典型 shell 命令前缀开头（粗放黑名单）。
+
+    Returns:
+        失败时返回错误字符串；通过返回空串。
+
+    Notes:
+        这是 cron 触发后 message 会原样进 main_agent 的纵深防御层。LLM 自身
+        本来也会拒绝执行 "请运行 rm -rf /" 之类指令，但留个粗筛护栏减少
+        攻击面（恶意人通过 scheduler_mgr 给将来某轮 main_agent 灌 prompt）。
+    """
+    if not isinstance(message, str) or not message.strip():
+        return "payload.message 不能为空。"
+    if len(message) > _MAX_MESSAGE_LEN:
+        return (
+            f"payload.message 长度 {len(message)} 超过上限 {_MAX_MESSAGE_LEN} 字符。"
+            "请改写为简短的自然语言任务描述。"
+        )
+    trimmed = message.lstrip()
+    lowered = trimmed.lower()
+    for prefix in _SHELLY_PREFIXES:
+        if lowered.startswith(prefix):
+            return (
+                f"payload.message 看起来是 shell 命令（以 {prefix.strip()!r} 开头）。"
+                "scheduler_mgr 只接受自然语言任务描述（例如：'提醒我下午开会'、"
+                "'生成今日投资早报'）。"
+            )
+    return ""
+
 
 def _load_store() -> Dict[str, Any]:
     if not TASKS_PATH.exists():
@@ -65,6 +120,10 @@ def create_job(
             "errmsg": f"无效的 schedule.kind：{schedule_kind}\n建议：使用 at/every/cron 之一。",
             "data": {},
         }
+
+    msg_err = _validate_message(message)
+    if msg_err:
+        return {"errcode": 1, "errmsg": msg_err, "data": {}}
 
     if schedule_kind == "cron" and not expr:
         return {
@@ -199,6 +258,9 @@ def update_job(
         payload["routing_key"] = routing_key
         changed = True
     if message is not None:
+        msg_err = _validate_message(message)
+        if msg_err:
+            return {"errcode": 1, "errmsg": msg_err, "data": {}}
         payload["message"] = message
         changed = True
 

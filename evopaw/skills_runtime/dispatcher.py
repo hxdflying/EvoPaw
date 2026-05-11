@@ -114,6 +114,7 @@ class SkillDispatcher:
         sub_agent_model: str = DEFAULT_SUB_AGENT_MODEL,
         sub_agent_max_turns: int = 20,
         result_callback: ResultCallback | None = None,
+        workspace_root: str = "/workspace",
     ) -> None:
         self.session_id = session_id
         self.routing_key = routing_key
@@ -123,8 +124,15 @@ class SkillDispatcher:
         self.sub_agent_max_turns = sub_agent_max_turns
         # 后台任务完成时通过 callback 推送结果；foreground 路径不消费此字段。
         self.result_callback = result_callback
+        # Sub-Agent 实际执行的 cwd 与 requires.files 解析根。
+        # 容器：'/workspace'；本机直跑：传入仓库的 workspace_dir 绝对路径。
+        # 占位符（${EVOPAW_SESSION_DIR} 等）仍按容器规约渲染为 /workspace/sessions/...
+        # 即 SKILL.md 跨部署形态保持一致；只有进程内的物理 cwd / 文件检查随之调整。
+        self.workspace_root = workspace_root
 
-        self.registry = _build_skill_registry(self.skills_dir)
+        self.registry = _build_skill_registry(
+            self.skills_dir, workspace_root=self.workspace_root,
+        )
         self._instruction_cache: dict[str, str] = {}
 
     def get_description(self) -> str:
@@ -180,16 +188,15 @@ class SkillDispatcher:
             self.registry, skill_name, self.session_id,
             self.routing_key, self._instruction_cache,
         )
-        # Sub-Agent cwd 固定为 /workspace（容器内路径），与主 Agent 的 session_cwd
-        # 不同。理由：
+        # Sub-Agent cwd = workspace_root，与主 Agent 的 session_cwd 不同。理由：
         #   1. Skill 脚本（pdf/docx/feishu_ops/scheduler_mgr 等）以及 SKILL.md
-        #      指令普遍约定相对路径解析自 /workspace（如 .config/feishu.json、
+        #      指令普遍约定相对路径解析自 workspace 根（如 .config/feishu.json、
         #      cron/tasks.json、sessions/{sid}/...）；改成 session_cwd 会让
         #      跨 session 的全局资源（凭证、cron 元数据）解析失败。
-        #   2. Sub-Agent 跨 session 写共享数据（cron/、workspace/.config/）的
-        #      场景由 docker-compose 把 workspace_dir 挂载到 /workspace 实现，
-        #      session 隔离则由 SKILL.md 内显式拼 sessions/{session_dir}/ 实现。
-        _workspace_root = "/workspace"
+        #   2. 容器场景下 docker-compose 把仓库 workspace_dir 挂到 /workspace，
+        #      Dockerfile 又建立 /mnt/skills → /app/evopaw/skills 软链接；
+        #      本机直跑时 main_agent 透传仓库实际的 workspace_dir 绝对路径。
+        _workspace_root = self.workspace_root
 
         # 延迟 import 避免循环（agents.skill_agent → claude SDK；让本模块保持纯逻辑）
         from evopaw.agents.skill_agent import _new_task_id, run_skill_agent  # noqa: PLC0415
@@ -198,6 +205,9 @@ class SkillDispatcher:
         task_id = _new_task_id()
 
         execution_mode = skill_info.get("execution_mode", "foreground")
+        # SKILL.md frontmatter 的 `allowed-tools` 白名单；None 表示走 Sub-Agent
+        # 默认全集（Bash/Read/Write/Edit/Grep/Glob）。
+        allowed_tools = skill_info.get("allowed_tools")
 
         # background 路径：立即注册任务并返回 task_id；完成后通过 callback 推送结果。
         if execution_mode == "background":
@@ -208,11 +218,12 @@ class SkillDispatcher:
                 workspace_root=_workspace_root,
                 task_id=task_id,
                 run_skill_agent=run_skill_agent,
+                allowed_tools=allowed_tools,
             )
 
         logger.info(
-            "dispatch task skill: skill=%s, routing_key=%s, session_id=%s, task_id=%s, mode=foreground",
-            skill_name, self.routing_key, self.session_id, task_id,
+            "dispatch task skill: skill=%s, routing_key=%s, session_id=%s, task_id=%s, mode=foreground, allowed_tools=%s",
+            skill_name, self.routing_key, self.session_id, task_id, allowed_tools,
         )
 
         result_text = await run_skill_agent(
@@ -223,6 +234,7 @@ class SkillDispatcher:
             model=self.sub_agent_model,
             max_turns=self.sub_agent_max_turns,
             task_id=task_id,
+            allowed_tools=allowed_tools,
         )
         return result_text
 
@@ -235,6 +247,7 @@ class SkillDispatcher:
         workspace_root: str,
         task_id: str,
         run_skill_agent: Any,
+        allowed_tools: list[str] | None = None,
     ) -> str:
         """把 task skill 放进后台运行，立即返回 task_id 提示给 LLM。
 
@@ -262,6 +275,7 @@ class SkillDispatcher:
                     model=self.sub_agent_model,
                     max_turns=self.sub_agent_max_turns,
                     task_id=task_id,
+                    allowed_tools=allowed_tools,
                 )
             except asyncio.CancelledError:
                 logger.info(

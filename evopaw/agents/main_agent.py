@@ -200,6 +200,29 @@ def build_agent_fn(
         # 5. 按 runtime_family 准备 backend_hints：
         #    - claude_sdk_compat: 注入 SDK MCP server。
         #    - openai_chat / anthropic_messages: 注入纯逻辑 SkillDispatcher。
+        # background task skill 完成后直接推送结果，不回注 main agent context。
+        # 闭包捕获 sender / routing_key / root_id；SDK / HTTP 两条路径共用同一个。
+        async def _bg_result_callback(
+            task_id: str, skill_name: str, result_text: str,
+        ) -> None:
+            msg = (
+                f"📌 后台任务 task#{task_id}（{skill_name}）已完成：\n\n"
+                f"{result_text}"
+            )
+            try:
+                await sender.send(routing_key, msg, root_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "background result push failed (task_id=%s, skill=%s)",
+                    task_id, skill_name,
+                    extra={"routing_key": routing_key, "session_id": session_id},
+                    exc_info=True,
+                )
+
+        # Sub-Agent cwd / requires.files 解析的 workspace 根。
+        # 容器：workspace_dir 通常就是 /workspace，本机直跑时是仓库下的真实路径，
+        # 两种场景统一从这里透传，避免 dispatcher 硬编码 /workspace 在本机失真。
+        skills_workspace_root = str(workspace_dir)
         backend_hints: dict[str, object] = {}
         if main_runtime.runtime_family == "claude_sdk_compat":
             skill_server = build_skill_loader_server(
@@ -208,28 +231,11 @@ def build_agent_fn(
                 history_all=history,
                 sub_agent_model=effective_sub_model,
                 sub_agent_max_turns=sub_agent_max_turns,
+                result_callback=_bg_result_callback,
+                workspace_root=skills_workspace_root,
             )
             backend_hints = {"mcp_servers": {"evopaw": skill_server}}
         elif main_runtime.runtime_family in ("openai_chat", "anthropic_messages"):
-            # background task skill 完成后直接推送结果，不回注 main agent context。
-            # 闭包捕获 sender / routing_key / root_id，dispatcher 自身保持纯逻辑。
-            async def _bg_result_callback(
-                task_id: str, skill_name: str, result_text: str,
-            ) -> None:
-                msg = (
-                    f"📌 后台任务 task#{task_id}（{skill_name}）已完成：\n\n"
-                    f"{result_text}"
-                )
-                try:
-                    await sender.send(routing_key, msg, root_id)
-                except Exception:  # noqa: BLE001
-                    logger.warning(
-                        "background result push failed (task_id=%s, skill=%s)",
-                        task_id, skill_name,
-                        extra={"routing_key": routing_key, "session_id": session_id},
-                        exc_info=True,
-                    )
-
             dispatcher = SkillDispatcher(
                 session_id=session_id,
                 routing_key=routing_key,
@@ -237,6 +243,7 @@ def build_agent_fn(
                 sub_agent_model=effective_sub_model,
                 sub_agent_max_turns=sub_agent_max_turns,
                 result_callback=_bg_result_callback,
+                workspace_root=skills_workspace_root,
             )
             backend_hints = {"skill_dispatcher": dispatcher}
         else:

@@ -29,6 +29,62 @@ _DEFAULT_WORKSPACE_ROOT = "/workspace"
 _EXECUTION_MODES = frozenset({"foreground", "background"})
 _DEFAULT_EXECUTION_MODE = "foreground"
 
+# Sub-Agent 当前实际能挂载的工具集合（与 evopaw/llm/claude_client.py 的默认
+# allowed_tools 对齐）。SKILL.md frontmatter 里的 `allowed-tools` 只能是它的
+# 子集；出现集合外的工具名会被静默剔除并告警，不让一个错别字让 Sub-Agent 起
+# 不来或拿到非预期权限。
+_VALID_SUB_AGENT_TOOLS = frozenset(
+    {"Bash", "Read", "Write", "Edit", "Grep", "Glob"}
+)
+
+
+def _parse_allowed_tools(front: dict[str, Any]) -> list[str] | None:
+    """从 frontmatter 解析 `allowed-tools` 白名单。
+
+    返回值约定：
+
+    - `None`：未声明 / 解析失败 / 校验失败 → Sub-Agent 走默认全集。
+    - `list[str]`（非空）：合法的工具子集，dispatcher / skill_agent 下发到
+      `ClaudeAgentOptions.allowed_tools`。
+
+    解析规则：
+
+    - 必须是 list。
+    - 每项必须是非空 str，去重 + 保序后取交集 `_VALID_SUB_AGENT_TOOLS`。
+    - 全部不合法（空交集）→ 视为"作者写了字段但无效内容"，降级 None 并告警。
+    """
+    raw = front.get("allowed-tools") if isinstance(front, dict) else None
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        logger.warning("allowed-tools 不是 list，忽略：%r", raw)
+        return None
+
+    seen: set[str] = set()
+    accepted: list[str] = []
+    rejected: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            rejected.append(repr(item))
+            continue
+        name = item.strip()
+        if name not in _VALID_SUB_AGENT_TOOLS:
+            rejected.append(name)
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        accepted.append(name)
+
+    if rejected:
+        logger.warning(
+            "allowed-tools 中以下条目不在 Sub-Agent 工具集 %s 内，已剔除：%s",
+            sorted(_VALID_SUB_AGENT_TOOLS), rejected,
+        )
+    if not accepted:
+        return None
+    return accepted
+
 
 def _parse_execution_mode(front: dict[str, Any]) -> str:
     """从 frontmatter 中提取 execution.mode；非法值降级为 foreground。
@@ -259,6 +315,10 @@ def _build_skill_registry(
             # 默认 foreground；显式声明 background 时 dispatcher 会立即返回 task_id，
             # 并把执行 spawn 到 SubAgentRegistry。
             "execution_mode": _parse_execution_mode(front),
+            # None 表示走 Sub-Agent 默认全集（Bash/Read/Write/Edit/Grep/Glob）；
+            # 非空 list 表示 SKILL.md 显式声明的最小权限子集。dispatcher 透传给
+            # run_skill_agent，再传到 ClaudeAgentOptions.allowed_tools。
+            "allowed_tools": _parse_allowed_tools(front),
         }
 
     return registry

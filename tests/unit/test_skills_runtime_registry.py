@@ -422,3 +422,57 @@ class TestRegistryExecutionMode:
         )
         reg = _build_skill_registry(empty_skills_dir)
         assert reg["weird_mode"]["execution_mode"] == "foreground"
+
+
+class TestAllowedTools:
+    """SKILL.md `allowed-tools` 白名单解析。
+
+    实现最小权限：缺省走 Sub-Agent 默认全集，显式声明时只下发声明的子集。
+    """
+
+    def test_no_field_yields_none(self, empty_skills_dir: Path):
+        _write_skill(empty_skills_dir, "no_tools_field")
+        reg = _build_skill_registry(empty_skills_dir)
+        assert reg["no_tools_field"]["allowed_tools"] is None
+
+    def test_valid_subset_recorded(self, empty_skills_dir: Path):
+        _write_skill(
+            empty_skills_dir, "ms_skill",
+            extra_frontmatter="allowed-tools:\n  - Read\n  - Write\n",
+        )
+        reg = _build_skill_registry(empty_skills_dir)
+        assert reg["ms_skill"]["allowed_tools"] == ["Read", "Write"]
+
+    def test_preserves_order_dedupes(self, empty_skills_dir: Path):
+        _write_skill(
+            empty_skills_dir, "order_skill",
+            extra_frontmatter="allowed-tools:\n  - Bash\n  - Read\n  - Bash\n  - Write\n",
+        )
+        reg = _build_skill_registry(empty_skills_dir)
+        assert reg["order_skill"]["allowed_tools"] == ["Bash", "Read", "Write"]
+
+    def test_unknown_tool_filtered(self, empty_skills_dir: Path):
+        _write_skill(
+            empty_skills_dir, "mixed_skill",
+            extra_frontmatter="allowed-tools:\n  - Read\n  - Bogus\n  - browser_navigate\n",
+        )
+        reg = _build_skill_registry(empty_skills_dir)
+        # 未知工具被剔除，剩下合法子集
+        assert reg["mixed_skill"]["allowed_tools"] == ["Read"]
+
+    def test_all_unknown_falls_back_to_none(self, empty_skills_dir: Path):
+        _write_skill(
+            empty_skills_dir, "bad_only",
+            extra_frontmatter="allowed-tools:\n  - sandbox_execute_bash\n  - browser_navigate\n",
+        )
+        reg = _build_skill_registry(empty_skills_dir)
+        # 全部不合法 → 视作未声明，避免给出空 allowed_tools 让 Sub-Agent 起不来
+        assert reg["bad_only"]["allowed_tools"] is None
+
+    def test_non_list_falls_back_to_none(self, empty_skills_dir: Path):
+        _write_skill(
+            empty_skills_dir, "scalar_skill",
+            extra_frontmatter='allowed-tools: "Read"\n',
+        )
+        reg = _build_skill_registry(empty_skills_dir)
+        assert reg["scalar_skill"]["allowed_tools"] is None

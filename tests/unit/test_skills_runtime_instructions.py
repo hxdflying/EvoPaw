@@ -222,8 +222,12 @@ class TestRealRepoSkills:
         if not _REPO_SKILLS_DIR.exists():
             pytest.skip("repo skills dir not present")
         registry = _build_skill_registry(_REPO_SKILLS_DIR)
-        # 当前清单 19 个 enabled skill（含 hk-investment-morning-report）
-        assert len(registry) == 19
+        # load_skills.yaml 当前 19 个声明，其中 web_browse / investment-consult
+        # 因为 SKILL.md 引用了 Sub-Agent 不具备的工具被显式 disable（A1 修复，
+        # 见 docs/skills-module-review-codex-2026-05-07.md），剩余 17 个 enabled。
+        assert len(registry) == 17
+        assert "web_browse" not in registry
+        assert "investment-consult" not in registry
         out = _build_description_xml(registry, "test_sid")
         assert "<available_skills>" in out
         # /workspace/skills 的错误前提不应出现

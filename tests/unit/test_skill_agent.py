@@ -280,6 +280,42 @@ class TestTaskIdInRunSkillAgent:
         assert "内部错误" in result
 
     @pytest.mark.asyncio
+    async def test_allowed_tools_passthrough(self):
+        """allowed_tools 必须被透传到 build_sub_agent_options，缺省为 None。"""
+        mock_result = MagicMock()
+        mock_result.result = "ok"
+
+        async def fake_query(prompt, options):
+            yield mock_result
+
+        # 显式传入子集
+        with patch("evopaw.agents.skill_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.skill_agent.build_sub_agent_options") as mock_opts, \
+             patch("evopaw.agents.skill_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            await run_skill_agent(
+                skill_name="memory-save",
+                skill_instructions="instructions",
+                task_context="save it",
+                session_path="/workspace/sessions/sid",
+                allowed_tools=["Read", "Write"],
+            )
+        assert mock_opts.call_args[1]["allowed_tools"] == ["Read", "Write"]
+
+        # 不传 → 走 None（build_sub_agent_options 内部退回默认全集）
+        with patch("evopaw.agents.skill_agent.query", side_effect=fake_query), \
+             patch("evopaw.agents.skill_agent.build_sub_agent_options") as mock_opts, \
+             patch("evopaw.agents.skill_agent.ResultMessage", type(mock_result)):
+            mock_opts.return_value = MagicMock()
+            await run_skill_agent(
+                skill_name="pdf",
+                skill_instructions="instructions",
+                task_context="do it",
+                session_path="/workspace/sessions/sid",
+            )
+        assert mock_opts.call_args[1]["allowed_tools"] is None
+
+    @pytest.mark.asyncio
     async def test_log_prefix_contains_task_id(self, caplog):
         """日志前缀应为 [subagent#<id>]。"""
         import logging

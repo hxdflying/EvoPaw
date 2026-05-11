@@ -108,3 +108,37 @@ class TestClaudeMcpAdapter:
             skills_dir=tmp_skills_dir,
         )
         assert server is not None
+
+    def test_result_callback_passthrough_to_dispatcher(
+        self, tmp_skills_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """SDK 路径必须把 result_callback 透传给内部 SkillDispatcher。
+
+        过往这条链路漏接，导致 claude_sdk_compat backend 下 background skill
+        完成后结果只写日志、不推送给用户（参见 docs/skills-module-review-codex-2026-05-07.md）。
+        通过 monkeypatch 拦截 SkillDispatcher 构造调用，断言 callback 真的被注入。
+        """
+        from evopaw.skills_runtime.adapters import claude_mcp
+
+        captured: dict = {}
+
+        class _StubDispatcher:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def get_description(self) -> str:
+                return "<available_skills></available_skills>"
+
+        monkeypatch.setattr(claude_mcp, "SkillDispatcher", _StubDispatcher)
+
+        async def _cb(_t: str, _s: str, _r: str) -> None:
+            return None
+
+        claude_mcp.build_skill_loader_server(
+            session_id="sid",
+            skills_dir=tmp_skills_dir,
+            result_callback=_cb,
+            workspace_root="/tmp/ws",
+        )
+        assert captured["result_callback"] is _cb
+        assert captured["workspace_root"] == "/tmp/ws"

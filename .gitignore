@@ -7,6 +7,9 @@ workspace-init/
 # Local docs (not for GitHub)
 docs/
 
+# Local Claude Code working state
+.claude/
+
 # Python
 __pycache__/
 *.pyc

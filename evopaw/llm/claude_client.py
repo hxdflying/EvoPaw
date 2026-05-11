@@ -62,11 +62,18 @@ def build_main_agent_options(
     )
 
 
+# Sub-Agent 默认开放的工具集合。SKILL.md frontmatter 没声明 `allowed-tools`
+# 时使用这一组；与 evopaw/skills_runtime/registry.py:_VALID_SUB_AGENT_TOOLS
+# 必须保持一致（registry 的白名单校验只允许这些值）。
+_DEFAULT_SUB_AGENT_TOOLS: list[str] = ["Bash", "Read", "Write", "Edit", "Grep", "Glob"]
+
+
 def build_sub_agent_options(
     system_prompt: str,
     cwd: str,
     model: str = DEFAULT_SUB_AGENT_MODEL,
     max_turns: int = 20,
+    allowed_tools: list[str] | None = None,
 ) -> ClaudeAgentOptions:
     """构建 Sub-Agent（任务型 Skill 执行）的 ClaudeAgentOptions。
 
@@ -75,11 +82,14 @@ def build_sub_agent_options(
         cwd: session workspace 路径
         model: Sub-Agent 使用的模型
         max_turns: 最大对话轮次
+        allowed_tools: SKILL.md frontmatter 声明的最小权限工具子集；
+            None 时退回 `_DEFAULT_SUB_AGENT_TOOLS`（最大允许集）。
     """
+    tools = list(allowed_tools) if allowed_tools else list(_DEFAULT_SUB_AGENT_TOOLS)
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
-        allowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob"],
+        allowed_tools=tools,
         cwd=cwd,
         max_turns=max_turns,
         permission_mode="bypassPermissions",

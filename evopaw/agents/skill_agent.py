@@ -39,6 +39,7 @@ async def run_skill_agent(
     model: str = DEFAULT_SUB_AGENT_MODEL,
     max_turns: int = 20,
     task_id: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> str:
     """运行任务型 Skill 的 Sub-Agent。
 
@@ -54,6 +55,10 @@ async def run_skill_agent(
         max_turns: Sub-Agent 最大对话轮次
         task_id: 可选的 8 字符 hex 任务 id；缺省自动生成。dispatcher 透传时
             会传入同一个 id，便于跨日志追踪。
+        allowed_tools: SKILL.md frontmatter `allowed-tools` 白名单子集。
+            None 时 build_sub_agent_options 走默认全集（最小可用集）；
+            非空 list 时下发到 ClaudeAgentOptions.allowed_tools，让单个
+            Skill 的 Sub-Agent 拿到的工具是 SKILL.md 显式声明的最小集合。
 
     Returns:
         Sub-Agent 的文本回复；异常时返回带 `task#xxxxxxxx` 的错误提示。
@@ -61,8 +66,8 @@ async def run_skill_agent(
     tid = task_id or _new_task_id()
     log_prefix = f"[subagent#{tid}]"
     logger.info(
-        "%s run_skill_agent: skill=%s, cwd=%s, model=%s, max_turns=%d",
-        log_prefix, skill_name, session_path, model, max_turns,
+        "%s run_skill_agent: skill=%s, cwd=%s, model=%s, max_turns=%d, allowed_tools=%s",
+        log_prefix, skill_name, session_path, model, max_turns, allowed_tools,
     )
 
     options = build_sub_agent_options(
@@ -70,6 +75,7 @@ async def run_skill_agent(
         cwd=session_path,
         model=model,
         max_turns=max_turns,
+        allowed_tools=allowed_tools,
     )
 
     try:

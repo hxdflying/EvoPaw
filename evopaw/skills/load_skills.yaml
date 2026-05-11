@@ -45,9 +45,13 @@ skills:
     enabled: true
 
   # ── 网页浏览与内容提取 ──────────────────────────────────────────────────────
+  # ⚠️ 暂时禁用：SKILL.md 引用 browser_* / sandbox_convert_to_markdown，但当前
+  # Sub-Agent 工具集只有 Bash/Read/Write/Edit/Grep/Glob（见 claude_client.py:82），
+  # 这些工具拿不到，调用必然失败。后续补 httpx + markitdown 纯 Bash 实现的
+  # scripts/ 后再启用。详见 docs/skills-module-review-codex-2026-05-07.md。
   - name: web_browse
-    type: task        # 需要代码执行（browser_* 工具 + sandbox_convert_to_markdown）
-    enabled: true
+    type: task
+    enabled: false
 
   # ── 历史记录读取（参考型：Agent 自行推理，无需 Sub-Agent）─────────────────────
   - name: history_reader
@@ -86,10 +90,12 @@ skills:
     type: task
     enabled: true
 
+  # ⚠️ 暂时禁用：SKILL.md 列出 sandbox_execute_bash / browser_navigate 等
+  # Sub-Agent 不具备的工具。补真实数据脚本（参考 investment-report 的 akshare 用法）后再启用。
   - name: investment-consult
     path: ./investment-consult
     type: task
-    enabled: true
+    enabled: false
 
   - name: hk-investment-morning-report
     path: ./hk-investment-morning-report
