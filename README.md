@@ -1,59 +1,70 @@
 <div align="center">
-  <strong>English</strong> | <a href="./README.zh-CN.md">中文</a>
+  <img src="image/logo.png" alt="EvoPaw" width="640" />
+
+  <h1>EvoPaw · 小爪子</h1>
+
+  <p><em>A local-first Feishu work assistant built around a file-based Skills ecosystem.</em></p>
+
+  <p>
+    <strong>English</strong> · <a href="./README.zh-CN.md">中文</a>
+  </p>
 </div>
 
-# EvoPaw
+---
 
-EvoPaw is a local-first Feishu work assistant. It connects to Feishu through the
-official WebSocket channel, routes each conversation through an agent runtime,
-and expands the assistant with a file-based Skills system.
+EvoPaw connects to Feishu through the official **WebSocket** channel, routes each
+conversation through a multi-provider **agent runtime**, and grows new abilities
+through a folder of self-describing **Skills**.
 
-The project is designed for local machines, private servers, and internal
-networks. It does not require a public inbound webhook endpoint.
+No public webhook. No vendor lock-in. Your data stays on your box.
 
-## Highlights
+## ✨ Highlights
 
-- Feishu WebSocket integration for direct chats, group chats, and threaded chats.
-- Multi-provider main-agent runtime with built-in `claude_sdk`, `anthropic`, and
-  `dashscope` providers, plus configurable OpenAI-compatible providers.
-- Task Skills for document processing, Feishu operations, web search, scheduling,
-  memory management, and investment workflows.
-- Three-layer memory: local bootstrap files, compressed session context, and
-  pgvector semantic search.
-- Feishu audio handling through DashScope Fun-ASR: download, transcribe, reason,
-  and reply.
-- Verbose mode that streams tool progress back to Feishu.
-- Optional local TestAPI for debugging without a real Feishu event.
-- Prometheus metrics and JSON-line runtime logs.
+- 🪶 **Local-first.** Runs on a laptop, home server, or air-gapped VM — no inbound webhook required.
+- 🔌 **Multi-provider runtime.** Built-in `claude_sdk`, `anthropic`, `dashscope`, plus any OpenAI-compatible provider.
+- 🧰 **File-based Skills.** Drop in a `SKILL.md`, get a new capability — PDFs, Feishu ops, web search, scheduling, investment workflows, and more.
+- 🧠 **Three-layer memory.** Bootstrap files, compressed session context, and pgvector semantic recall.
+- 🎙️ **Voice in, voice out.** Feishu audio → DashScope Fun-ASR → Agent → reply.
+- 📡 **Verbose mode.** Stream tool execution back to the chat for transparent debugging.
+- 📊 **Observable.** Prometheus metrics and JSON-line logs out of the box.
 
-## Architecture
+## 🚀 Quick Start
+
+```bash
+# 1. install
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+npm install -g @anthropic-ai/claude-code   # default sub-agent runtime
+
+# 2. configure
+cp config.yaml.template config.yaml        # fill in Feishu app_id / app_secret
+
+# 3. run
+docker compose up -d                       # app + pgvector
+# or, for a manual loop:
+python3 -m evopaw.main
+```
+
+Send a message to your Feishu bot — that's it.
+
+## 🏗️ Architecture
 
 ```text
 Feishu WebSocket
-    |
-    v
-FeishuListener
-    |
-    v
-Runner
-    |
-    v
-Main Agent Runtime
-  claude_sdk | anthropic_messages | openai_chat
-    |
-    +--> SkillDispatcher
-    |       |
-    |       +--> reference Skills and history_reader inline
-    |       +--> task Skills through Claude SDK Sub-Agent
-    |
-    +--> Memory runtime
-            |
-            +--> bootstrap files
-            +--> ctx.json / raw.jsonl
-            +--> pgvector semantic index
+    │
+    ▼
+FeishuListener ──▶ Runner ──▶ Main Agent Runtime
+                                 ( claude_sdk │ anthropic_messages │ openai_chat )
+                                       │
+                          ┌────────────┴────────────┐
+                          ▼                         ▼
+                   SkillDispatcher              Memory runtime
+                   ├─ reference / history       ├─ bootstrap files
+                   └─ task → Sub-Agent          ├─ ctx.json / raw.jsonl
+                                                └─ pgvector index
 ```
 
-Routing keys separate conversation state:
+Conversations are isolated by **routing key**:
 
 | Feishu context | Routing key |
 | --- | --- |
@@ -61,7 +72,8 @@ Routing keys separate conversation state:
 | Group chat | `group:{chat_id}` |
 | Threaded chat | `thread:{chat_id}:{thread_id}` |
 
-## Repository Map
+<details>
+<summary>📁 Repository layout</summary>
 
 ```text
 evopaw/
@@ -85,45 +97,17 @@ evopaw/
 └── tools/                  # local helper tools, including image loading
 ```
 
-## Requirements
+</details>
 
-For local development:
+## ⚙️ Configuration
 
-- Python 3.12 or newer, matching `pyproject.toml`.
-- Node.js 22 or newer.
-- Claude Code CLI if `roles.subagent` uses the default `claude_sdk` runtime.
-- Docker and Docker Compose if you want the bundled pgvector service.
-- A Feishu app with bot and WebSocket event permissions.
-
-Install Python dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Install the Claude Code CLI for the default Sub-Agent path:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Authenticate the CLI or configure API keys according to the provider runtime you
-choose.
-
-## Configuration
-
-Create a private runtime config:
+Create a private runtime config (Git-ignored):
 
 ```bash
 cp config.yaml.template config.yaml
 ```
 
-`config.yaml` is intentionally ignored by Git. Keep real credentials and local
-deployment details there, not in committed files.
-
-Minimum Feishu configuration:
+Minimum Feishu block:
 
 ```yaml
 feishu:
@@ -131,26 +115,26 @@ feishu:
   app_secret: "${FEISHU_APP_SECRET}"
 ```
 
-Common environment variables:
+### Environment variables
 
 | Variable | Required when | Purpose |
 | --- | --- | --- |
-| `FEISHU_APP_ID` | Always | Feishu app ID |
-| `FEISHU_APP_SECRET` | Always | Feishu app secret |
-| `ANTHROPIC_API_KEY` | `anthropic` provider | Anthropic Messages API |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | Always | Feishu app credentials |
+| `ANTHROPIC_API_KEY` | Using `anthropic` provider | Anthropic Messages API |
 | `DASHSCOPE_API_KEY` | ASR enabled | DashScope Fun-ASR WebSocket |
-| `QWEN_API_KEY` | DashScope memory roles | DashScope OpenAI-compatible chat and embeddings |
+| `QWEN_API_KEY` | DashScope memory roles | DashScope OpenAI-compatible chat / embeddings |
 | `TAVILY_API_KEY` | `tavily_search` Skill | Web search |
 | `MOONSHOT_API_KEY` | Custom Moonshot provider | Example OpenAI-compatible provider |
-| `POSTGRES_PASSWORD` | Docker pgvector override | PostgreSQL password |
+| `POSTGRES_PASSWORD` | Override Docker pgvector | PostgreSQL password |
 
-`DASHSCOPE_API_KEY` and `QWEN_API_KEY` can usually hold the same DashScope key.
-They are separate names because ASR and OpenAI-compatible memory clients read
-different environment variables.
+> `DASHSCOPE_API_KEY` and `QWEN_API_KEY` can hold the same DashScope key — they
+> exist as two names because ASR and the OpenAI-compatible memory client read
+> different env vars.
 
-### Provider Roles
+<details>
+<summary>🎛️ Provider roles &amp; model overrides</summary>
 
-The default role bindings are:
+Default role bindings:
 
 | Role | Default provider | Default model |
 | --- | --- | --- |
@@ -160,7 +144,7 @@ The default role bindings are:
 | `memory_embedding` | `dashscope` | `text-embedding-v3` |
 | `memory_extract` | `dashscope` | `qwen3-max` |
 
-You can override providers and models in `config.yaml`:
+Override providers and models inside `config.yaml`:
 
 ```yaml
 providers:
@@ -178,24 +162,21 @@ roles:
   memory_extract: { provider: dashscope, model: qwen3-max }
 ```
 
-Current limitation: task-style Skills still run through the Claude SDK Sub-Agent
-path. Keep `roles.subagent` on `claude_sdk` unless you are changing the runtime
-implementation.
+> **Current limitation.** Task-style Skills still run through the Claude SDK
+> Sub-Agent path. Keep `roles.subagent` on `claude_sdk` unless you are changing
+> the runtime implementation.
 
-## Local Workspace
+</details>
 
-EvoPaw reads optional bootstrap files from `data/workspace` before each agent
-turn. These files are personal runtime data and are intentionally ignored by Git.
+<details>
+<summary>📦 Local workspace &amp; bootstrap files</summary>
+
+EvoPaw reads optional bootstrap files from `data/workspace` before each agent turn:
 
 ```bash
 mkdir -p data/workspace
-touch data/workspace/soul.md
-touch data/workspace/user.md
-touch data/workspace/agent.md
-touch data/workspace/memory.md
+touch data/workspace/{soul,user,agent,memory}.md
 ```
-
-Bootstrap files:
 
 | File | Purpose |
 | --- | --- |
@@ -204,56 +185,45 @@ Bootstrap files:
 | `agent.md` | Local operating rules and tool guidance |
 | `memory.md` | Long-term memory index |
 
-If these files are missing, EvoPaw skips the corresponding bootstrap section and
-continues to run.
+Missing files are silently skipped.
 
-## Run
+</details>
 
-### Docker Compose
+## ▶️ Running
 
-Docker Compose starts the app and PostgreSQL with pgvector:
+### Docker Compose (recommended)
 
 ```bash
 docker compose up -d --build
 ```
 
-When running inside Compose, set `memory.db_dsn` in `config.yaml` to the Compose
-service host:
+Set `memory.db_dsn` to the Compose service host:
 
 ```yaml
 memory:
   db_dsn: "postgresql://evopaw:evopaw123@evopaw-pgvector:5432/evopaw_memory"
 ```
 
-Services:
-
 | Service | Purpose |
 | --- | --- |
 | `evopaw-main` | Python app and agent runtime |
 | `pgvector` | PostgreSQL 16 with pgvector |
 
-### Manual Run
-
-Start only pgvector if you want semantic memory:
+### Manual
 
 ```bash
-docker compose -f pgvector-docker-compose.yaml up -d
+docker compose -f pgvector-docker-compose.yaml up -d   # optional: semantic memory
+python3 -m evopaw.main
 ```
 
-For a manual Python process, keep the database host as `localhost`:
+For the manual path use `localhost` in the DSN:
 
 ```yaml
 memory:
   db_dsn: "postgresql://evopaw:evopaw123@localhost:5432/evopaw_memory"
 ```
 
-Then start EvoPaw:
-
-```bash
-python3 -m evopaw.main
-```
-
-Runtime endpoints and files:
+### Runtime endpoints
 
 | Item | Location |
 | --- | --- |
@@ -263,9 +233,10 @@ Runtime endpoints and files:
 | Context snapshots | `data/ctx/` |
 | Workspace data | `data/workspace/` |
 
-## Local TestAPI
+<details>
+<summary>🧪 Local TestAPI (no Feishu needed)</summary>
 
-Enable the TestAPI in `config.yaml`:
+Enable in `config.yaml`:
 
 ```yaml
 debug:
@@ -288,129 +259,90 @@ Clear local test sessions:
 curl -X DELETE http://127.0.0.1:9090/api/test/sessions
 ```
 
-## Slash Commands
+</details>
+
+## 💬 Slash Commands
 
 | Command | Description |
 | --- | --- |
 | `/new` | Start a fresh session |
-| `/verbose on` | Stream tool progress to Feishu |
-| `/verbose off` | Stop streaming tool progress |
-| `/verbose` | Show verbose-mode status |
+| `/verbose on` · `/verbose off` · `/verbose` | Stream / stop / inspect tool-progress streaming |
 | `/status` | Show current session details |
 | `/help` | Show command help |
 
-## Skills
+## 🛠️ Skills
 
-The authoritative Skills list lives in `evopaw/skills/load_skills.yaml`.
+The authoritative list lives in [`evopaw/skills/load_skills.yaml`](./evopaw/skills/load_skills.yaml).
 
 | Skill | Type | Purpose |
 | --- | --- | --- |
-| `pdf` | task | PDF parsing and text extraction |
-| `docx` | task | Word document handling |
-| `pptx` | task | PowerPoint handling |
-| `xlsx` | task | Excel handling |
-| `feishu_ops` | task | Feishu docs, sheets, bitables, messages, and files |
+| `pdf` / `docx` / `pptx` / `xlsx` | task | Document parsing and extraction |
+| `feishu_ops` | task | Feishu docs, sheets, bitables, messages, files |
 | `scheduler_mgr` | task | Scheduled task management |
-| `tavily_search` | task | Internet search through Tavily |
+| `tavily_search` | task | Internet search via Tavily |
 | `arxiv_search` | task | arXiv search and PDF retrieval |
 | `web_browse` | task | Web content extraction |
 | `history_reader` | reference | Inline paginated conversation history |
-| `memory-save` | task | Save durable memory |
-| `search_memory` | task | Search pgvector-backed memory |
-| `memory-governance` | task | Review and clean memory files |
+| `memory-save` / `search_memory` / `memory-governance` | task | Long-term memory lifecycle |
 | `skill-creator` | task | Turn repeatable workflows into Skills |
 | `daily-summary` | task | Daily work summaries |
-| `investment-report` | task | Investment research reports |
-| `investment-review` | task | Portfolio review |
-| `investment-consult` | task | Investment Q&A |
+| `investment-report` / `investment-review` / `investment-consult` | task | Investment workflows |
 | `hk-investment-morning-report` | task | Hong Kong market morning report |
 
-## Memory
+## 🧠 Memory
 
 | Layer | Storage | Role |
 | --- | --- | --- |
-| L1 Bootstrap | `data/workspace/*.md` | Identity, user profile, operating rules, memory index |
-| L2 Context | `data/ctx/*.json` and `*.jsonl` | Compressed session context and raw audit log |
-| L3 Vector | PostgreSQL + pgvector | Semantic search over historical turns |
+| L1 · Bootstrap | `data/workspace/*.md` | Identity, profile, operating rules, memory index |
+| L2 · Context | `data/ctx/*.json` · `*.jsonl` | Compressed session context and audit log |
+| L3 · Vector | PostgreSQL + pgvector | Semantic search over historical turns |
 
-If the database or DashScope key is unavailable, EvoPaw can still run; semantic
-memory features degrade instead of blocking the main Feishu flow.
+If the database or DashScope key is unavailable, semantic memory degrades —
+the main Feishu flow keeps running.
 
-## Voice Messages
-
-When Feishu sends an audio message, EvoPaw can run:
+## 🎙️ Voice Messages
 
 ```text
-Feishu audio
-    -> FeishuDownloader
-    -> SpeechRecognitionService
-    -> FunASRRealtimeClient
-    -> Main Agent
-    -> Feishu reply
+Feishu audio → FeishuDownloader → SpeechRecognitionService
+            → FunASRRealtimeClient → Main Agent → Feishu reply
 ```
 
-Key behavior:
-
-- Audio bytes are sent directly to the Fun-ASR WebSocket after download.
+- Audio bytes stream straight to Fun-ASR after download.
 - ASR credentials stay in the main process environment.
-- Long or slow audio receives an early acknowledgement before the final reply.
-- Duplicate Feishu message deliveries are deduplicated by recent `msg_id`.
+- Long or slow clips receive an early acknowledgement before the final reply.
+- Duplicate Feishu deliveries are deduped by recent `msg_id`.
 - ASR metrics are exported through Prometheus.
 
-Useful tools:
+Helpers:
 
 ```bash
 python3 scripts/audit_audio_sample_rate.py data/workspace/sessions/
 python3 scripts/calibrate_thresholds.py
 ```
 
-See `docs/runbooks/voice-pre-production.md` for deployment checks.
-
-## Testing
-
-Run the full test suite:
+## 🧪 Testing
 
 ```bash
-python3 -m pytest
+python3 -m pytest                                              # everything
+python3 -m pytest tests/unit/ --cov=evopaw --cov-report=term   # unit + coverage
+python3 -m pytest tests/integration/ -m "not llm"              # integration (no LLM)
+python3 -m pytest tests/integration/test_voice_end_to_end.py   # voice e2e mock
 ```
 
-Run only unit tests:
+## 🔒 Security & Local-Only Files
 
-```bash
-python3 -m pytest tests/unit/ -v --cov=evopaw --cov-report=term-missing
-```
+Keep these on the local box — never commit:
 
-Run integration tests that do not require external LLM access:
-
-```bash
-python3 -m pytest tests/integration/ -m "not llm" -v
-```
-
-Run the voice end-to-end mock test:
-
-```bash
-python3 -m pytest tests/integration/test_voice_end_to_end.py -v
-```
-
-## Security and Local-Only Files
-
-The following are intentionally local-only:
-
-- `.env`
-- `config.yaml`
-- `data/`
-- `tests/logs/`
-- `workspace-init/`
+- `.env`, `config.yaml`
+- `data/`, `tests/logs/`, `workspace-init/`
 - `.coverage`, `coverage.json`, `htmlcov/`
 - Python and test caches
 
-Do not commit real Feishu, Anthropic, DashScope, Tavily, database, or provider
-credentials. If a secret was ever committed, rotate it and clean Git history
-instead of only deleting it in a later commit.
+> If a secret was ever committed, **rotate it** and clean Git history — don't
+> just delete it in a follow-up commit.
 
-## Further Reading
+---
 
-- `config.yaml.template` for all runtime options.
-- `docs/message-flow.md` for message routing details.
-- `docs/design-data.md` for data and memory design.
-- `docs/runbooks/voice-pre-production.md` for ASR rollout checks.
+<div align="center">
+  <sub>Made with 🐾 for people who want their assistant to live on their own machine.</sub>
+</div>
