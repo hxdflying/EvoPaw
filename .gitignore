@@ -4,6 +4,9 @@ tests/logs/
 workspace-init/
 .codex
 
+# Local docs (not for GitHub)
+docs/
+
 # Python
 __pycache__/
 *.pyc
