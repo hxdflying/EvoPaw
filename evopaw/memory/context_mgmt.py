@@ -267,20 +267,39 @@ def maybe_compress(
 
 
 def load_session_ctx(session_id: str, ctx_dir: Path) -> list[dict]:
-    """读取压缩 context 快照；文件不存在时返回空列表。"""
+    """读取压缩 context 快照；文件不存在或损坏时返回空列表。
+
+    JSONDecodeError 兜底场景：上次进程崩溃中途写入留下半截 JSON。
+    完整轨迹仍可从 raw.jsonl 重建，所以这里直接降级为空快照而不抛异常，
+    避免阻断该 session 的主流程。
+    """
     p = ctx_dir / f"{session_id}_ctx.json"
     if not p.exists():
         return []
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning(
+            "ctx.json 损坏（疑似上次崩溃残留），降级为空快照: session=%s", session_id,
+        )
+        return []
 
 
 def save_session_ctx(session_id: str, messages: list[dict], ctx_dir: Path) -> None:
-    """覆盖写入当前压缩 context 快照。"""
+    """覆盖写入当前压缩 context 快照（write-then-rename 原子写）。
+
+    直接 write_text 在写入中途崩溃会留下半截 JSON，下次启动 load_session_ctx
+    会 JSONDecodeError 阻断主流程。这里写 .tmp 后 rename，rename 在同一目录
+    内是原子操作。
+    """
     ctx_dir.mkdir(parents=True, exist_ok=True)
-    (ctx_dir / f"{session_id}_ctx.json").write_text(
+    target = ctx_dir / f"{session_id}_ctx.json"
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(
         json.dumps(messages, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    tmp.replace(target)
 
 
 def append_session_raw(
@@ -291,6 +310,7 @@ def append_session_raw(
     """追加消息到原始完整历史（append-only JSONL，保留所有中间过程）。
 
     两份存储分工：``ctx.json`` 为压缩快照，``raw.jsonl`` 为完整审计日志。
+    flush + fsync 与 session/manager.py 风格对齐，避免崩溃丢失最近 1-2 轮审计。
     """
     if not messages:
         return
@@ -300,3 +320,5 @@ def append_session_raw(
         for msg in messages:
             record = {**msg, "ts": ts}
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -17,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from evopaw.session.models import MessageEntry, SessionEntry
+
+logger = logging.getLogger(__name__)
 
 
 # 同时活跃的 per-session JSONL Lock 数量上限。
@@ -165,6 +168,13 @@ class SessionManager:
                         s["message_count"] = s.get("message_count", 0) + 2
                         self._write_index(index)
                         return
+            # 走到这里说明 session_id 不在任何 routing 下——理论不应发生
+            # （append 前调用方一定走过 get_or_create / create_new_session）。
+            # 不抛异常以免破坏 JSONL 已成功写入的语义，但记 warning 让运维感知。
+            logger.warning(
+                "session_id=%s 不在 index 中，message_count 未更新（漏 2 条计数）",
+                session_id,
+            )
 
     async def get_session_info(self, routing_key: str) -> SessionEntry:
         """获取当前活跃 session 信息（同 get_or_create 但不创建新的）"""

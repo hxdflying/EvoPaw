@@ -344,8 +344,10 @@ def _index_single_turn(
     db_dsn:          str,
 ) -> None:
     """同步内核，在 run_in_executor 线程池中运行。"""
-    # 生成稳定幂等 id
-    raw_id  = f"{session_id}_{turn_ts}_{user_message[:32]}"
+    # 生成稳定幂等 id：hash 完整 user_message 而不是前 32 字，避免长前缀相同
+    # 的两条消息（"复习一下今天的会议纪要 1"/"...2"）共用 turn_id 被
+    # ON CONFLICT DO NOTHING 静默丢弃。
+    raw_id  = f"{session_id}_{turn_ts}_{user_message}"
     turn_id = hashlib.sha256(raw_id.encode()).hexdigest()[:16]
 
     conn = None

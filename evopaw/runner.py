@@ -471,7 +471,16 @@ class Runner:
 
         # 9. 发送回复：优先更新卡片，失败时降级为 send()
         if card_msg_id:
-            await self._sender.update_card(card_msg_id, final_reply)
+            try:
+                await self._sender.update_card(card_msg_id, final_reply)
+            except Exception:  # noqa: BLE001
+                # 卡片更新失败（飞书 API 错误 / 网络等）不能让最终回复丢失。
+                # 降级为普通消息，保证用户至少能收到内容。
+                logger.warning(
+                    "update_card 失败，降级为 send() card_msg_id=%s",
+                    card_msg_id, exc_info=True,
+                )
+                await self._sender.send(key, final_reply, inbound.root_id)
         else:
             await self._sender.send(key, final_reply, inbound.root_id)
 

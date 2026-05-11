@@ -63,7 +63,11 @@ class FeishuDownloader:
                 )
                 return None
 
-            dest_path.write_bytes(resp.file.read())
+            # 写 .tmp 后 rename，避免中途崩溃留下损坏附件被下次 Sub-Agent 读到。
+            # rename 在同一目录内是原子操作。
+            tmp_path = dest_path.with_name(dest_path.name + ".tmp")
+            tmp_path.write_bytes(resp.file.read())
+            tmp_path.replace(dest_path)
             logger.info(
                 "附件下载完成 file_key=%s -> %s (%d bytes)",
                 attachment.file_key,
